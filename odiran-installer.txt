@@ -1,0 +1,256 @@
+cat > complete_install_odoo18.sh << 'EOF'
+#!/bin/bash
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+print_status() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Check if running as root
+if [[ $EUID -eq 0 ]]; then
+   print_error "Do not run this script as root!"
+   exit 1
+fi
+
+print_status "=== Complete Odoo 18 Installation ==="
+
+# 1. Update system
+print_status "Updating system..."
+sudo apt update && sudo apt upgrade -y
+
+# 2. Install dependencies
+print_status "Installing system dependencies..."
+sudo apt install -y wget git python3 python3-pip python3-dev python3-venv \
+    python3-wheel libxml2-dev libxslt1-dev libldap2-dev libsasl2-dev \
+    libtiff5-dev libjpeg8-dev libopenjp2-7-dev zlib1g-dev libfreetype6-dev \
+    liblcms2-dev libwebp-dev libharfbuzz-dev libfribidi-dev libxcb1-dev \
+    libpq-dev build-essential libssl-dev libffi-dev curl
+
+# 3. Install PostgreSQL
+print_status "Installing PostgreSQL..."
+sudo apt install -y postgresql postgresql-client
+sudo systemctl start postgresql
+sudo systemctl enable postgresql
+
+# 4. Create PostgreSQL user
+print_status "Creating PostgreSQL user..."
+sudo -u postgres psql -c "DROP USER IF EXISTS odoo18e;" 2>/dev/null || true
+sudo -u postgres psql -c "CREATE USER odoo18e WITH CREATEDB;"
+sudo -u postgres psql -c "ALTER USER odoo18e PASSWORD 'odoo123';"
+
+# 5. Remove existing odoo user and recreate
+print_status "Creating system user..."
+sudo deluser odoo 2>/dev/null || true
+sudo delgroup odoo 2>/dev/null || true
+sudo adduser --system --home=/opt/odoo --group odoo
+
+# 6. Clean and create directories
+print_status "Setting up directories..."
+sudo rm -rf /opt/odoo18-enterprise
+sudo mkdir -p /opt/odoo18-enterprise
+sudo mkdir -p /var/log/odoo
+sudo mkdir -p /etc/odoo
+
+# 7. Download source code
+print_status "Downloading Odoo from https://github.com/drmostafazade/odiran"
+sudo git clone https://github.com/drmostafazade/odiran.git /opt/odoo18-enterprise/odoo
+
+# Create additional directories
+sudo mkdir -p /opt/odoo18-enterprise/addons_manatra
+sudo mkdir -p /opt/odoo18-enterprise/data
+
+# 8. Set permissions
+print_status "Setting permissions..."
+sudo chown -R odoo:odoo /opt/odoo18-enterprise
+sudo chown odoo:root /var/log/odoo
+sudo chown odoo:root /etc/odoo
+
+# 9. Check repository structure
+print_status "Checking repository structure..."
+ls -la /opt/odoo18-enterprise/odoo/
+
+# 10. Create proper requirements.txt
+print_status "Creating requirements.txt..."
+sudo -u odoo tee /opt/odoo18-enterprise/odoo/requirements.txt > /dev/null <<EOL
+Babel==2.14.0
+chardet==5.2.0
+cryptography==41.0.7
+decorator==5.1.1
+docutils==0.20.1
+ebaysdk==2.1.5
+freezegun==1.2.2
+gevent==23.9.1
+greenlet==3.0.1
+idna==3.4
+Jinja2==3.1.2
+libsass==0.22.0
+lxml==4.9.3
+MarkupSafe==2.1.3
+num2words==0.5.13
+ofxparse==0.21
+passlib==1.7.4
+Pillow==10.1.0
+polib==1.2.0
+psutil==5.9.6
+psycopg2-binary==2.9.8
+pydot==1.4.2
+pyOpenSSL==23.3.0
+pypdf2==3.0.1
+pyserial==3.5
+python-dateutil==2.8.2
+python-stdnum==1.19
+pytz==2023.3
+pyusb==1.2.1
+qrcode==7.4.2
+reportlab==4.0.7
+requests==2.31.0
+urllib3==2.0.7
+vobject==0.9.6.1
+werkzeug==2.3.7
+xlrd==2.0.1
+XlsxWriter==3.1.9
+xlwt==1.3.0
+zeep==4.2.1
+EOL
+
+# 11. Create virtual environment
+print_status "Creating virtual environment..."
+sudo -u odoo python3 -m venv /opt/odoo18-enterprise/odoo-venv
+
+# 12. Install Python packages
+print_status "Installing Python packages..."
+sudo -u odoo /opt/odoo18-enterprise/odoo-venv/bin/pip install --upgrade pip
+sudo -u odoo /opt/odoo18-enterprise/odoo-venv/bin/pip install -r /opt/odoo18-enterprise/odoo/requirements.txt
+
+# 13. Install Odoo in development mode
+print_status "Installing Odoo in development mode..."
+cd /opt/odoo18-enterprise/odoo
+sudo -u odoo /opt/odoo18-enterprise/odoo-venv/bin/pip install -e .
+
+# 14. Install wkhtmltopdf
+print_status "Installing wkhtmltopdf..."
+cd /tmp
+wget -q https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.jammy_amd64.deb
+sudo dpkg -i wkhtmltox_0.12.6.1-3.jammy_amd64.deb 2>/dev/null || true
+sudo apt-get install -f -y
+
+# 15. Install Node.js properly
+print_status "Installing Node.js..."
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm install -g rtlcss
+
+# 16. Detect executable and create config
+print_status "Configuring Odoo..."
+
+# Detect addons path
+if [ -d /opt/odoo18-enterprise/odoo/enterprise ]; then
+    ADDONS_PATH="/opt/odoo18-enterprise/addons_manatra,/opt/odoo18-enterprise/odoo/enterprise,/opt/odoo18-enterprise/odoo/addons"
+elif [ -d /opt/odoo18-enterprise/odoo/odoo/addons ]; then
+    ADDONS_PATH="/opt/odoo18-enterprise/addons_manatra,/opt/odoo18-enterprise/odoo/odoo/addons"
+else
+    ADDONS_PATH="/opt/odoo18-enterprise/addons_manatra,/opt/odoo18-enterprise/odoo/addons"
+fi
+
+# Create config
+sudo tee /etc/odoo/odoo.conf > /dev/null <<EOL
+[options]
+admin_passwd = 5011700
+db_host = localhost
+db_port = 5432
+db_user = odoo18e
+db_password = odoo123
+addons_path = $ADDONS_PATH
+data_dir = /opt/odoo18-enterprise/data
+logfile = /var/log/odoo/odoo.log
+log_level = info
+xmlrpc_port = 8069
+workers = 2
+EOL
+
+sudo chown odoo:odoo /etc/odoo/odoo.conf
+sudo chmod 640 /etc/odoo/odoo.conf
+
+# 17. Test execution methods
+print_status "Testing execution methods..."
+
+cd /opt/odoo18-enterprise/odoo
+
+if sudo -u odoo /opt/odoo18-enterprise/odoo-venv/bin/python odoo-bin --help >/dev/null 2>&1; then
+    print_status "✓ Method 1: Direct execution works"
+    EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python /opt/odoo18-enterprise/odoo/odoo-bin"
+    WORK_DIR="/opt/odoo18-enterprise/odoo"
+    ENV_VARS=""
+elif sudo -u odoo PYTHONPATH=/opt/odoo18-enterprise/odoo /opt/odoo18-enterprise/odoo-venv/bin/python odoo-bin --help >/dev/null 2>&1; then
+    print_status "✓ Method 2: PYTHONPATH execution works"
+    EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python /opt/odoo18-enterprise/odoo/odoo-bin"
+    WORK_DIR="/opt/odoo18-enterprise/odoo"
+    ENV_VARS="Environment=PYTHONPATH=/opt/odoo18-enterprise/odoo"
+elif sudo -u odoo /opt/odoo18-enterprise/odoo-venv/bin/python -m odoo --help >/dev/null 2>&1; then
+    print_status "✓ Method 3: Module execution works"
+    EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python -m odoo"
+    WORK_DIR="/opt/odoo18-enterprise/odoo"
+    ENV_VARS="Environment=PYTHONPATH=/opt/odoo18-enterprise/odoo"
+else
+    print_error "No execution method works!"
+    exit 1
+fi
+
+# 18. Create systemd service
+print_status "Creating systemd service..."
+sudo tee /etc/systemd/system/odoo.service > /dev/null <<EOL
+[Unit]
+Description=Odoo
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=odoo
+Group=odoo
+ExecStart=$EXEC_CMD -c /etc/odoo/odoo.conf
+Restart=always
+WorkingDirectory=$WORK_DIR
+$ENV_VARS
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+# 19. Start service
+print_status "Starting Odoo service..."
+sudo systemctl daemon-reload
+sudo systemctl enable odoo
+sudo systemctl start odoo
+
+sleep 15
+
+# 20. Check status
+if systemctl is-active --quiet odoo; then
+    print_status "🎉 SUCCESS! Odoo 18 is running!"
+    print_status "🌐 URL: http://localhost:8069"
+    print_status "👤 Username: admin"
+    print_status "🔑 Password: admin"
+    print_status "🗄️ DB User: odoo18e / Password: odoo123"
+    print_status ""
+    print_status "📂 Installation paths:"
+    print_status "  Source: /opt/odoo18-enterprise/odoo"
+    print_status "  Custom addons: /opt/odoo18-enterprise/addons_manatra"
+    print_status "  Config: /etc/odoo/odoo.conf"
+    print_status "  Logs: /var/log/odoo/odoo.log"
+else
+    print_error "❌ Installation failed!"
+    print_status "Checking logs..."
+    sudo journalctl -u odoo -n 20
+fi
+EOF
+
+chmod +x complete_install_odoo18.sh
+./complete_install_odoo18.sh
