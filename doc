@@ -1,0 +1,14 @@
+# شروع سرویس
+sudo systemctl start odoo
+
+# توقف سرویس
+sudo systemctl stop odoo
+
+# ریست سرویس
+sudo systemctl restart odoo
+
+# بررسی وضعیت
+sudo systemctl status odoo
+
+# مشاهده لاگ‌ها
+sudo journalctl -u odoo -f
