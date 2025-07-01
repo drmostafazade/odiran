@@ -1,0 +1,352 @@
+# Translation of Odoo Server.
+# This file contains the translation of the following modules:
+# 	* activity_dashboard_mngmnt
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Odoo Server 17.0-20241001\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2024-10-04 08:00+0000\n"
+"PO-Revision-Date: 2024-10-04 08:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: \n"
+"Plural-Forms: \n"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model,name:activity_dashboard_mngmnt.model_mail_activity
+#: model:ir.ui.menu,name:activity_dashboard_mngmnt.mail_activity_menu
+#: model_terms:ir.ui.view,arch_db:activity_dashboard_mngmnt.mail_activity_view_form
+msgid "Activity"
+msgstr "فعالیت"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid "Activity Dashboard"
+msgstr "داشبورد فعالیت"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.ui.menu,name:activity_dashboard_mngmnt.activity_menu_root
+msgid "Activity Management"
+msgstr "مدیریت فعالیت"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.actions.act_window,name:activity_dashboard_mngmnt.activity_tag_action
+#: model:ir.model,name:activity_dashboard_mngmnt.model_activity_tag
+#: model:ir.ui.menu,name:activity_dashboard_mngmnt.activity_tag_menu
+msgid "Activity Tag"
+msgstr "برچسب فعالیت"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,field_description:activity_dashboard_mngmnt.field_mail_activity__activity_tag_ids
+msgid "Activity Tags"
+msgstr "برچسب های فعالیت"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/js/activity_dashboard.js:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: model:ir.ui.menu,name:activity_dashboard_mngmnt.activity_type_menu
+#, python-format
+msgid "Activity Type"
+msgstr "نوع فعالیت"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid "Activity Types"
+msgstr "انواع فعالیت"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/js/activity_dashboard.js:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid "All Activities"
+msgstr "همه فعالیت ها"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid "Assigned to"
+msgstr "اختصاص داده شده است"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,field_description:activity_dashboard_mngmnt.field_activity_tag__color
+msgid "Color"
+msgstr "رنگ"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid ""
+"Completed\n"
+"                            Activities"
+msgstr "تکمیل\n فعالیت‌ها"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/js/activity_dashboard.js:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid "Completed Activities"
+msgstr "فعالیت های تکمیل شده"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.ui.menu,name:activity_dashboard_mngmnt.activity_menu_configuration
+msgid "Configuration"
+msgstr "پیکربندی"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,field_description:activity_dashboard_mngmnt.field_activity_tag__create_uid
+msgid "Created by"
+msgstr "ایجاد شده توسط"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,field_description:activity_dashboard_mngmnt.field_activity_tag__create_date
+msgid "Created on"
+msgstr "ایجاد در"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.actions.client,name:activity_dashboard_mngmnt.activity_management_dashboard_action
+#: model:ir.ui.menu,name:activity_dashboard_mngmnt.activity_management_dashboard_menu
+msgid "Dashboard"
+msgstr "داشبورد"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid "Dead Line Date"
+msgstr "تاریخ خط مرگ"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,field_description:activity_dashboard_mngmnt.field_activity_tag__display_name
+msgid "Display Name"
+msgstr "نمایش نام"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields.selection,name:activity_dashboard_mngmnt.selection__mail_activity__state__done
+msgid "Done"
+msgstr "انجام شده"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,help:activity_dashboard_mngmnt.field_activity_tag__color
+msgid "Field that gives color to the tag."
+msgstr "فیلدی که به تگ رنگ می دهد."
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,field_description:activity_dashboard_mngmnt.field_activity_tag__id
+msgid "ID"
+msgstr "شناسه"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,field_description:activity_dashboard_mngmnt.field_activity_tag__write_uid
+msgid "Last Updated by"
+msgstr "آخرین به روز رسانی توسط"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,field_description:activity_dashboard_mngmnt.field_activity_tag__write_date
+msgid "Last Updated on"
+msgstr "آخرین به روز رسانی در"
+
+#. module: activity_dashboard_mngmnt
+#: model_terms:ir.ui.view,arch_db:activity_dashboard_mngmnt.mail_activity_view_form
+msgid "Log a note..."
+msgstr "ثبت یادداشت..."
+
+#. module: activity_dashboard_mngmnt
+#: model_terms:ir.ui.view,arch_db:activity_dashboard_mngmnt.mail_activity_view_form
+msgid "Log an Activity"
+msgstr "ثبت یک فعالیت"
+
+#. module: activity_dashboard_mngmnt
+#: model_terms:ir.ui.view,arch_db:activity_dashboard_mngmnt.mail_activity_view_form
+msgid "Mark as Done"
+msgstr "علامت گذاری به عنوان انجام شد"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid "Name"
+msgstr "نام"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,help:activity_dashboard_mngmnt.field_activity_tag__name
+msgid "Name of the activity tag."
+msgstr "نام تگ فعالیت."
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid "No Data Available"
+msgstr "داده ای موجود نیست"
+
+#. module: activity_dashboard_mngmnt
+#: model_terms:ir.actions.act_window,help:activity_dashboard_mngmnt.activity_tag_action
+msgid "No tags found. Let's create one!"
+msgstr "هیچ برچسبی یافت نشد. "
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid "Origin"
+msgstr "مبدأ"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields.selection,name:activity_dashboard_mngmnt.selection__mail_activity__state__overdue
+msgid "Overdue"
+msgstr "سررسید گذشته"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid ""
+"Overdue\n"
+"                            Activities"
+msgstr "فعالیت های عقب افتاده\n"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/js/activity_dashboard.js:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid "Overdue Activities"
+msgstr "فعالیت های معوقه"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields.selection,name:activity_dashboard_mngmnt.selection__mail_activity__state__planned
+msgid "Planned"
+msgstr "برنامه ریزی شده"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid ""
+"Planned\n"
+"                            Activities"
+msgstr "فعالیت های برنامه ریزی شده\n"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/js/activity_dashboard.js:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid "Planned Activities"
+msgstr "فعالیت های برنامه ریزی شده"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,help:activity_dashboard_mngmnt.field_mail_activity__activity_tag_ids
+msgid "Select activity tags."
+msgstr "برچسب های فعالیت را انتخاب کنید."
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,field_description:activity_dashboard_mngmnt.field_mail_activity__state
+msgid "State"
+msgstr "استان"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,help:activity_dashboard_mngmnt.field_mail_activity__state
+msgid "State of the activity"
+msgstr "وضعیت فعالیت"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields,field_description:activity_dashboard_mngmnt.field_activity_tag__name
+msgid "Tag Name"
+msgstr "نام برچسب"
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.constraint,message:activity_dashboard_mngmnt.constraint_activity_tag_name_uniq
+msgid "Tag name already exists !"
+msgstr "نام برچسب از قبل وجود دارد!"
+
+#. module: activity_dashboard_mngmnt
+#: model_terms:ir.ui.view,arch_db:activity_dashboard_mngmnt.activity_tag_view_form
+#: model_terms:ir.ui.view,arch_db:activity_dashboard_mngmnt.activity_tag_view_tree
+msgid "Tags"
+msgstr "برچسب ها"
+
+#. module: activity_dashboard_mngmnt
+#: model_terms:ir.actions.act_window,help:activity_dashboard_mngmnt.activity_tag_action
+msgid "Tags are perfect to categorize."
+msgstr "برچسب ها برای دسته بندی عالی هستند."
+
+#. module: activity_dashboard_mngmnt
+#: model:ir.model.fields.selection,name:activity_dashboard_mngmnt.selection__mail_activity__state__today
+msgid "Today"
+msgstr "امروز"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid ""
+"Today's\n"
+"                            Activities"
+msgstr "فعالیت‌های\n امروز"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/js/activity_dashboard.js:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid "Today's Activities"
+msgstr "فعالیت های امروز"
+
+#. module: activity_dashboard_mngmnt
+#. odoo-javascript
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#: code:addons/activity_dashboard_mngmnt/static/src/xml/activity_dashboard_template.xml:0
+#, python-format
+msgid "View"
+msgstr "مشاهده"
+
+#. module: activity_dashboard_mngmnt
+#: model_terms:ir.ui.view,arch_db:activity_dashboard_mngmnt.mail_activity_view_form
+msgid "e.g. Discuss proposal"
+msgstr "به عنوان مثال "
+
+#. module: activity_dashboard_mngmnt
+#: model_terms:ir.ui.view,arch_db:activity_dashboard_mngmnt.activity_tag_view_form
+msgid "e.g. Services"
+msgstr "به عنوان مثال "
