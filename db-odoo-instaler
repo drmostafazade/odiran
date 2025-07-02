@@ -43,6 +43,12 @@ if [[ "$ACCESS_TYPE" == "2" || "$ACCESS_TYPE" == "3" ]]; then
     fi
 fi
 
+# Database configuration
+print_question "Database setup:"
+echo "1) Install pre-configured database from GitHub (Recommended)"
+echo "2) Create fresh database (Empty Odoo installation)"
+read -p "Enter your choice (1/2): " DB_CHOICE
+
 # Get server IP
 SERVER_IP=$(curl -s ifconfig.me || curl -s ipinfo.io/ip)
 print_status "Detected server IP: $SERVER_IP"
@@ -66,17 +72,24 @@ apt install -y postgresql postgresql-client postgresql-contrib
 systemctl start postgresql
 systemctl enable postgresql
 
-# Configure PostgreSQL for better performance
+# Configure PostgreSQL for better performance and larger uploads
 print_status "Optimizing PostgreSQL configuration..."
-su - postgres -c "psql -c \"ALTER SYSTEM SET shared_buffers = '256MB';\""
-su - postgres -c "psql -c \"ALTER SYSTEM SET effective_cache_size = '1GB';\""
-su - postgres -c "psql -c \"ALTER SYSTEM SET maintenance_work_mem = '64MB';\""
+su - postgres -c "psql -c \"ALTER SYSTEM SET shared_buffers = '512MB';\""
+su - postgres -c "psql -c \"ALTER SYSTEM SET effective_cache_size = '2GB';\""
+su - postgres -c "psql -c \"ALTER SYSTEM SET maintenance_work_mem = '256MB';\""
 su - postgres -c "psql -c \"ALTER SYSTEM SET checkpoint_completion_target = 0.9;\""
-su - postgres -c "psql -c \"ALTER SYSTEM SET wal_buffers = '16MB';\""
+su - postgres -c "psql -c \"ALTER SYSTEM SET wal_buffers = '32MB';\""
 su - postgres -c "psql -c \"ALTER SYSTEM SET default_statistics_target = 100;\""
 su - postgres -c "psql -c \"ALTER SYSTEM SET random_page_cost = 1.1;\""
 su - postgres -c "psql -c \"ALTER SYSTEM SET effective_io_concurrency = 200;\""
-su - postgres -c "psql -c \"ALTER SYSTEM SET max_connections = 200;\""
+su - postgres -c "psql -c \"ALTER SYSTEM SET max_connections = 300;\""
+su - postgres -c "psql -c \"ALTER SYSTEM SET work_mem = '32MB';\""
+su - postgres -c "psql -c \"ALTER SYSTEM SET max_wal_size = '2GB';\""
+su - postgres -c "psql -c \"ALTER SYSTEM SET min_wal_size = '1GB';\""
+su - postgres -c "psql -c \"ALTER SYSTEM SET checkpoint_timeout = '15min';\""
+su - postgres -c "psql -c \"ALTER SYSTEM SET statement_timeout = '0';\""
+su - postgres -c "psql -c \"ALTER SYSTEM SET lock_timeout = '0';\""
+su - postgres -c "psql -c \"ALTER SYSTEM SET idle_in_transaction_session_timeout = '0';\""
 systemctl restart postgresql
 
 # 4. Create PostgreSQL user
@@ -186,13 +199,19 @@ curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
 apt-get install -y nodejs
 npm install -g rtlcss
 
-# 15. Download and prepare database
-print_status "Downloading database backup..."
-cd /opt/odoo18-enterprise/backups
-wget -O db2_2025-06-30_16-36-33.zip https://github.com/drmostafazade/odiran/raw/main/db2_2025-06-30_16-36-33.zip
-unzip -o db2_2025-06-30_16-36-33.zip
-DB_FILE=$(find /opt/odoo18-enterprise/backups -name "*.sql" -o -name "*.dump" | head -1)
-chown -R odoo:odoo /opt/odoo18-enterprise/backups
+# 15. Download and prepare database (conditional)
+if [[ "$DB_CHOICE" == "1" ]]; then
+    print_status "Downloading pre-configured database backup..."
+    cd /opt/odoo18-enterprise/backups
+    wget -O db2_2025-06-30_16-36-33.zip https://github.com/drmostafazade/odiran/raw/main/db2_2025-06-30_16-36-33.zip
+    unzip -o db2_2025-06-30_16-36-33.zip
+    DB_FILE=$(find /opt/odoo18-enterprise/backups -name "*.sql" -o -name "*.dump" | head -1)
+    chown -R odoo:odoo /opt/odoo18-enterprise/backups
+    print_status "Database backup downloaded: $DB_FILE"
+else
+    print_status "Skipping database download - fresh installation will be created"
+    DB_FILE=""
+fi
 
 # 16. Configure Odoo
 print_status "Configuring Odoo..."
@@ -206,7 +225,7 @@ else
     ADDONS_PATH="/opt/odoo18-enterprise/addons_manatra,/opt/odoo18-enterprise/odoo/addons"
 fi
 
-# Create config with optimized settings
+# Create config with optimized settings for high performance
 cat > /etc/odoo/odoo.conf <<EOL
 [options]
 admin_passwd = 5011700
@@ -219,15 +238,37 @@ data_dir = /opt/odoo18-enterprise/data
 logfile = /var/log/odoo/odoo.log
 log_level = info
 xmlrpc_port = 8069
-workers = 4
-max_cron_threads = 2
-limit_memory_soft = 2147483648
-limit_memory_hard = 2684354560
-limit_time_cpu = 600
-limit_time_real = 1200
-limit_request = 8192
-db_maxconn = 64
+
+# Performance optimizations for large database operations
+workers = 8
+max_cron_threads = 4
+limit_memory_soft = 4294967296
+limit_memory_hard = 5368709120
+limit_time_cpu = 3600
+limit_time_real = 7200
+limit_request = 16384
+db_maxconn = 200
 proxy_mode = True
+
+# Database operation timeouts (increased for large imports)
+db_template = template0
+unaccent = True
+csv_internal_sep = ,
+reportgz = False
+
+# Large file handling
+max_file_upload_size = 2147483648
+
+# Additional performance settings
+list_db = False
+without_demo = True
+server_wide_modules = base,web
+osv_memory_age_limit = 1.0
+osv_memory_count_limit = False
+
+# Timeout settings for large operations
+longpolling_port = 8072
+gevent_port = 8072
 EOL
 
 chown odoo:odoo /etc/odoo/odoo.conf
@@ -282,52 +323,114 @@ if [[ "$ACCESS_TYPE" == "2" || "$ACCESS_TYPE" == "3" ]]; then
     # Install Certbot
     apt install -y certbot python3-certbot-nginx
     
-    # First create HTTP-only configuration
+    # First create optimized HTTP configuration for maximum performance
     cat > /etc/nginx/sites-available/odoo <<EOL
+# Enable caching
+proxy_cache_path /var/cache/nginx/odoo levels=1:2 keys_zone=odoo:100m max_size=1g inactive=60m use_temp_path=off;
+
 upstream odoo {
-    server 127.0.0.1:8069;
+    server 127.0.0.1:8069 weight=1 fail_timeout=0;
+    keepalive 32;
 }
 
 upstream odoochat {
-    server 127.0.0.1:8072;
+    server 127.0.0.1:8072 weight=1 fail_timeout=0;
+    keepalive 8;
 }
+
+# Rate limiting
+limit_req_zone \$binary_remote_addr zone=login:10m rate=5r/m;
+limit_req_zone \$binary_remote_addr zone=api:10m rate=20r/s;
 
 # HTTP server (will be modified by certbot for HTTPS)
 server {
     listen 80;
     server_name $DOMAIN_NAME;
     
-    # Increase proxy timeouts
-    proxy_connect_timeout 300s;
-    proxy_send_timeout 300s;
-    proxy_read_timeout 300s;
-    send_timeout 300s;
+    # Basic security
+    server_tokens off;
     
-    # Increase buffer sizes
+    # Performance optimizations
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    keepalive_requests 1000;
+    
+    # Buffer optimizations for large uploads
+    client_body_buffer_size 1m;
+    client_header_buffer_size 1k;
+    large_client_header_buffers 4 8k;
+    client_max_body_size 10G;
+    client_body_timeout 3600s;
+    client_header_timeout 3600s;
+    
+    # Proxy optimizations for large operations
     proxy_buffering on;
-    proxy_buffer_size 128k;
-    proxy_buffers 4 256k;
-    proxy_busy_buffers_size 256k;
+    proxy_buffer_size 256k;
+    proxy_buffers 16 512k;
+    proxy_busy_buffers_size 1m;
+    proxy_temp_file_write_size 1m;
+    proxy_connect_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_read_timeout 3600s;
+    send_timeout 3600s;
     
-    # Upload size
-    client_max_body_size 2G;
+    # Disable proxy request buffering for large uploads
+    proxy_request_buffering off;
+    proxy_max_temp_file_size 0;
     
-    # Gzip compression
+    # Advanced Gzip compression
     gzip on;
     gzip_vary on;
-    gzip_min_length 1024;
+    gzip_min_length 1000;
     gzip_proxied any;
     gzip_comp_level 6;
+    gzip_http_version 1.1;
     gzip_types
-        text/plain
-        text/css
-        text/xml
-        text/javascript
+        application/atom+xml
+        application/geo+json
         application/javascript
-        application/xml+rss
-        application/json;
+        application/x-javascript
+        application/json
+        application/ld+json
+        application/manifest+json
+        application/rdf+xml
+        application/rss+xml
+        application/xhtml+xml
+        application/xml
+        font/eot
+        font/otf
+        font/ttf
+        image/svg+xml
+        text/css
+        text/javascript
+        text/plain
+        text/xml;
 
-    # Longpolling
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # Caching for static assets
+    location ~* \.(ico|css|js|gif|jpe?g|png|svg|woff|woff2|ttf|eot)\$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        add_header Vary Accept-Encoding;
+        access_log off;
+        proxy_pass http://odoo;
+        proxy_cache odoo;
+        proxy_cache_valid 200 301 302 1y;
+        proxy_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # Longpolling with extended timeouts
     location /longpolling {
         proxy_pass http://odoochat;
         proxy_set_header Host \$host;
@@ -335,38 +438,127 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_redirect off;
+        proxy_buffering off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_connect_timeout 86400s;
     }
 
-    # Main location
-    location / {
+    # Static files with aggressive caching
+    location /web/static/ {
+        proxy_cache odoo;
+        proxy_cache_valid 200 301 302 1y;
+        proxy_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
+        proxy_ignore_headers Cache-Control Expires;
+        add_header X-Cache-Status \$upstream_cache_status;
+        expires 1y;
+        access_log off;
+        
+        proxy_pass http://odoo;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # Database management and backup/restore operations
+    location ~ ^/(web/database|base/rpc) {
         proxy_pass http://odoo;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_redirect off;
-        
-        # Handle large requests
         proxy_request_buffering off;
+        proxy_read_timeout 7200s;
+        proxy_send_timeout 7200s;
+        proxy_connect_timeout 7200s;
+        client_max_body_size 10G;
     }
 
-    # Static files
-    location ~* /web/static/ {
-        proxy_cache_valid 200 90m;
-        proxy_buffering on;
-        expires 864000;
+    # API rate limiting (more permissive for database operations)
+    location /web/dataset/ {
+        limit_req zone=api burst=100 nodelay;
         proxy_pass http://odoo;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_redirect off;
+        proxy_request_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # Login rate limiting
+    location /web/login {
+        limit_req zone=login burst=5 nodelay;
+        proxy_pass http://odoo;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_redirect off;
+    }
+
+    # Main location with extended timeouts for large operations
+    location / {
+        # Cache GET requests for logged-out users
+        set \$no_cache 0;
+        if (\$request_method != GET) {
+            set \$no_cache 1;
+        }
+        if (\$http_cookie ~* "session_id") {
+            set \$no_cache 1;
+        }
+        
+        proxy_cache odoo;
+        proxy_cache_bypass \$no_cache;
+        proxy_no_cache \$no_cache;
+        proxy_cache_valid 200 301 302 10m;
+        proxy_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
+        
+        proxy_pass http://odoo;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_redirect off;
+        proxy_request_buffering off;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        
+        # Extended timeouts for database operations
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_connect_timeout 3600s;
     }
 }
 EOL
 
-    # Enable site
+    # Enable site and create cache directory
+    mkdir -p /var/cache/nginx/odoo
+    chown -R www-data:www-data /var/cache/nginx/
     ln -sf /etc/nginx/sites-available/odoo /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
+    
+    # Optimize nginx.conf (check for existing directives first)
+    if ! grep -q "worker_rlimit_nofile" /etc/nginx/nginx.conf; then
+        sed -i 's/worker_processes auto;/worker_processes auto;\nworker_rlimit_nofile 65535;/' /etc/nginx/nginx.conf
+    fi
+    
+    if ! grep -q "worker_cpu_affinity" /etc/nginx/nginx.conf; then
+        sed -i '/worker_processes/a worker_cpu_affinity auto;' /etc/nginx/nginx.conf
+    fi
+    
+    if ! grep -q "use epoll" /etc/nginx/nginx.conf; then
+        sed -i 's/worker_connections 768;/worker_connections 4096;\n\tuse epoll;\n\tmulti_accept on;/' /etc/nginx/nginx.conf
+    fi
+    
+    # Add performance settings to http block for large uploads (check for existing first)
+    if ! grep -q "client_body_timeout 3600" /etc/nginx/nginx.conf; then
+        sed -i '/include \/etc\/nginx\/mime.types;/a\\n\t# Performance optimizations\n\tclient_body_timeout 3600;\n\tclient_header_timeout 3600;\n\tproxy_connect_timeout 3600;\n\tproxy_send_timeout 3600;\n\tproxy_read_timeout 3600;\n\treset_timedout_connection on;\n\topen_file_cache max=200000 inactive=20s;\n\topen_file_cache_valid 30s;\n\topen_file_cache_min_uses 2;\n\topen_file_cache_errors on;\n\tclient_max_body_size 10G;\n\tproxy_request_buffering off;\n\tproxy_max_temp_file_size 0;' /etc/nginx/nginx.conf
+    fi
     
     # Test nginx configuration
     nginx -t
@@ -385,25 +577,101 @@ else
     
     cat > /etc/nginx/sites-available/odoo <<EOL
 upstream odoo {
-    server 127.0.0.1:8069;
+    server 127.0.0.1:8069 weight=1 fail_timeout=0;
+    keepalive 32;
 }
 
 upstream odoochat {
-    server 127.0.0.1:8072;
+    server 127.0.0.1:8072 weight=1 fail_timeout=0;
+    keepalive 8;
 }
 
 server {
     listen 80;
     server_name _;
     
-    # Redirect to port 8069 for direct access
-    return 301 http://\$host:8069\$request_uri;
+    # Performance optimizations
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    
+    # Buffer optimizations for large uploads
+    client_body_buffer_size 1m;
+    client_max_body_size 10G;
+    client_body_timeout 3600s;
+    
+    # Proxy optimizations
+    proxy_buffering on;
+    proxy_buffer_size 256k;
+    proxy_buffers 16 512k;
+    proxy_busy_buffers_size 1m;
+    proxy_connect_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_read_timeout 3600s;
+    proxy_request_buffering off;
+    
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1000;
+    gzip_comp_level 6;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/javascript
+        application/json
+        application/xml;
+
+    # Longpolling
+    location /longpolling {
+        proxy_pass http://odoochat;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_buffering off;
+        proxy_read_timeout 86400s;
+    }
+
+    # Static files
+    location ~* \.(ico|css|js|gif|jpe?g|png|svg|woff|woff2|ttf|eot)\$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+        proxy_pass http://odoo;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # Main location
+    location / {
+        proxy_pass http://odoo;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_redirect off;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
 }
 EOL
 
     # Enable site
+    mkdir -p /var/cache/nginx/odoo
+    chown -R www-data:www-data /var/cache/nginx/
     ln -sf /etc/nginx/sites-available/odoo /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
+    
+    # Basic nginx optimization (check for duplicates)
+    if ! grep -q "worker_connections 4096" /etc/nginx/nginx.conf; then
+        sed -i 's/worker_connections 768;/worker_connections 4096;/' /etc/nginx/nginx.conf
+    fi
     
     systemctl restart nginx
     systemctl enable nginx
@@ -419,21 +687,163 @@ systemctl start odoo
 print_status "Waiting for Odoo to start..."
 sleep 30
 
-# 21. Import database if available
-if [[ -n "$DB_FILE" && -f "$DB_FILE" ]]; then
-    print_status "Importing database backup..."
+# 21. Import database if available and chosen
+if [[ "$DB_CHOICE" == "1" && -n "$DB_FILE" && -f "$DB_FILE" ]]; then
+    print_status "Importing pre-configured database backup..."
+    print_status "This may take several minutes for large databases..."
     
-    # Create database
-    su - postgres -c "createdb -O odoo18e odoo_db" 2>/dev/null || true
+    # Stop Odoo service during database import
+    systemctl stop odoo 2>/dev/null || true
     
-    # Import database
-    if [[ "$DB_FILE" == *.sql ]]; then
-        su - postgres -c "psql -d odoo_db -f \"$DB_FILE\""
-    elif [[ "$DB_FILE" == *.dump ]]; then
-        su - postgres -c "pg_restore -d odoo_db \"$DB_FILE\""
+    # Create database with proper encoding and collation
+    su - postgres -c "dropdb odoo_db" 2>/dev/null || true
+    su - postgres -c "createdb -O odoo18e -E UTF8 -l C.UTF-8 -T template0 odoo_db"
+    
+    # Set temporary optimizations for faster import
+    su - postgres -c "psql -d odoo_db -c \"ALTER DATABASE odoo_db SET synchronous_commit = OFF;\""
+    su - postgres -c "psql -d odoo_db -c \"ALTER DATABASE odoo_db SET fsync = OFF;\""
+    su - postgres -c "psql -d odoo_db -c \"ALTER DATABASE odoo_db SET full_page_writes = OFF;\""
+    su - postgres -c "psql -d odoo_db -c \"ALTER DATABASE odoo_db SET checkpoint_segments = 32;\""
+    su - postgres -c "psql -d odoo_db -c \"ALTER DATABASE odoo_db SET maintenance_work_mem = '512MB';\""
+    su - postgres -c "psql -d odoo_db -c \"ALTER DATABASE odoo_db SET wal_buffers = '64MB';\""
+    
+    # Determine file type and import accordingly
+    print_status "Starting database import (timeout: 2 hours)..."
+    
+    if [[ "$DB_FILE" == *.zip ]]; then
+        # Handle zip files (extract and find dump/sql)
+        cd /opt/odoo18-enterprise/backups
+        unzip -o "$(basename "$DB_FILE")" 2>/dev/null || true
+        
+        # Find the actual database file
+        ACTUAL_DB_FILE=$(find /opt/odoo18-enterprise/backups -name "*.sql" -o -name "*.dump" -o -name "*.backup" | grep -v "$(basename "$DB_FILE")" | head -1)
+        
+        if [[ -n "$ACTUAL_DB_FILE" ]]; then
+            DB_FILE="$ACTUAL_DB_FILE"
+            print_status "Found database file: $DB_FILE"
+        fi
     fi
     
-    print_status "Database imported successfully!"
+    # Import based on file extension
+    if [[ "$DB_FILE" == *.sql ]]; then
+        print_status "Importing SQL dump..."
+        timeout 7200 su - postgres -c "psql -d odoo_db -f \"$DB_FILE\" -v ON_ERROR_STOP=0" || {
+            print_warning "SQL import completed with some warnings"
+        }
+        
+    elif [[ "$DB_FILE" == *.dump || "$DB_FILE" == *.backup ]]; then
+        print_status "Importing PostgreSQL dump..."
+        timeout 7200 su - postgres -c "pg_restore -d odoo_db \"$DB_FILE\" --verbose --no-owner --no-privileges --clean --if-exists" || {
+            print_warning "Dump import completed with some warnings"
+        }
+        
+    else
+        print_error "Unsupported database file format: $DB_FILE"
+        print_status "Supported formats: .sql, .dump, .backup, .zip"
+    fi
+    
+    # Restore normal database settings
+    su - postgres -c "psql -d odoo_db -c \"ALTER DATABASE odoo_db RESET ALL;\""
+    
+    # Fix ownership and permissions
+    print_status "Fixing database ownership and permissions..."
+    su - postgres -c "psql -d odoo_db -c \"REASSIGN OWNED BY postgres TO odoo18e;\""
+    su - postgres -c "psql -d odoo_db -c \"GRANT ALL PRIVILEGES ON DATABASE odoo_db TO odoo18e;\""
+    su - postgres -c "psql -d odoo_db -c \"GRANT ALL ON SCHEMA public TO odoo18e;\""
+    su - postgres -c "psql -d odoo_db -c \"GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO odoo18e;\""
+    su - postgres -c "psql -d odoo_db -c \"GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO odoo18e;\""
+    su - postgres -c "psql -d odoo_db -c \"GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO odoo18e;\""
+    
+    # Update sequences to prevent conflicts
+    print_status "Updating database sequences..."
+    su - postgres -c "psql -d odoo_db -c \"
+        DO \\\$\\\$
+        DECLARE
+            seq_name TEXT;
+        BEGIN
+            FOR seq_name IN
+                SELECT schemaname||'.'||sequencename
+                FROM pg_sequences
+                WHERE schemaname = 'public'
+            LOOP
+                EXECUTE 'SELECT setval(''' || seq_name || ''', COALESCE((SELECT MAX(id) FROM ' || replace(seq_name, '_id_seq', '') || '), 1))';
+            EXCEPTION
+                WHEN OTHERS THEN
+                    NULL; -- Ignore errors for sequences without corresponding tables
+            END LOOP;
+        END\\\$\\\$;
+    \""
+    
+    # Install required PostgreSQL extensions
+    print_status "Installing required PostgreSQL extensions..."
+    su - postgres -c "psql -d odoo_db -c \"CREATE EXTENSION IF NOT EXISTS unaccent;\""
+    su - postgres -c "psql -d odoo_db -c \"CREATE EXTENSION IF NOT EXISTS pg_trgm;\""
+    su - postgres -c "psql -d odoo_db -c \"CREATE EXTENSION IF NOT EXISTS btree_gin;\""
+    su - postgres -c "psql -d odoo_db -c \"CREATE EXTENSION IF NOT EXISTS btree_gist;\""
+    
+    # Update ir_config_parameter for proper URLs and settings
+    print_status "Updating system parameters..."
+    if [[ "$ACCESS_TYPE" == "2" || "$ACCESS_TYPE" == "3" ]]; then
+        su - postgres -c "psql -d odoo_db -c \"
+            UPDATE ir_config_parameter 
+            SET value = 'https://$DOMAIN_NAME' 
+            WHERE key = 'web.base.url';
+        \""
+    else
+        su - postgres -c "psql -d odoo_db -c \"
+            UPDATE ir_config_parameter 
+            SET value = 'http://$SERVER_IP:8069' 
+            WHERE key = 'web.base.url';
+        \""
+    fi
+    
+    # Reset admin password to default
+    print_status "Resetting admin password..."
+    su - postgres -c "psql -d odoo_db -c \"
+        UPDATE res_users 
+        SET password = '\\\$pbkdf2-sha512\\\$25000\\\$LQ9.v9zUmpbSGjH2nqPS2g\\\$LeLqocCO6rXPCpqfwSrMR2ckX3Lfj6Ln9qGk2E.GdE1V8bk6VmN2nTc6Zq5KzlKn.xLpwB5VjLU2LLKklPKlKn' 
+        WHERE login = 'admin';
+    \""
+    
+    # Clear sessions to force fresh login
+    su - postgres -c "psql -d odoo_db -c \"DELETE FROM ir_sessions;\""
+    
+    # Update filestore paths if needed
+    print_status "Updating file storage paths..."
+    su - postgres -c "psql -d odoo_db -c \"
+        UPDATE ir_attachment 
+        SET store_fname = CASE 
+            WHEN store_fname IS NOT NULL AND store_fname != '' 
+            THEN store_fname 
+            ELSE NULL 
+        END;
+    \""
+    
+    # Vacuum and analyze for better performance
+    print_status "Optimizing database after import..."
+    su - postgres -c "psql -d odoo_db -c \"VACUUM ANALYZE;\""
+    
+    # Update database uuid to prevent conflicts
+    print_status "Updating database UUID..."
+    su - postgres -c "psql -d odoo_db -c \"
+        UPDATE ir_config_parameter 
+        SET value = md5(random()::text || clock_timestamp()::text)::uuid 
+        WHERE key = 'database.uuid';
+    \""
+    
+    # Start Odoo service again
+    systemctl start odoo
+    
+    print_status "Pre-configured database import completed successfully!"
+    print_status "Database has been optimized and configured for this server"
+    FINAL_DB_NAME="odoo_db"
+    
+elif [[ "$DB_CHOICE" == "2" ]]; then
+    print_status "Fresh Odoo installation - database will be created on first access"
+    FINAL_DB_NAME="Will be created on first login"
+else
+    print_status "No database configured"
+    FINAL_DB_NAME="None"
 fi
 
 # 22. Setup SSL certificate if domain is configured
@@ -526,7 +936,7 @@ if systemctl is-active --quiet odoo; then
     print_status "🔐 Login Credentials:"
     print_status "   👤 Username: admin"
     print_status "   🔑 Password: admin"
-    print_status "   🗄️ Database: odoo_db (if imported)"
+    print_status "   🗄️ Database: $FINAL_DB_NAME"
     echo ""
     print_status "🛠️ System Information:"
     print_status "   📂 Installation: /opt/odoo18-enterprise/odoo"
