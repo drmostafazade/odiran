@@ -260,7 +260,7 @@ reportgz = False
 max_file_upload_size = 2147483648
 
 # Additional performance settings
-list_db = False
+list_db = True
 without_demo = True
 server_wide_modules = base,web
 osv_memory_age_limit = 1.0
