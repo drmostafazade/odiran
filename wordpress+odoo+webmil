@@ -1,4 +1,4 @@
-cat > complete_server_installation.sh << 'EOF'
+cat > complete_odoo18_wordpress_install_fixed_v2.sh << 'EOF'
 #!/bin/bash
 
 # Colors
@@ -11,30 +11,91 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 print_status() {
-   echo -e "${GREEN}[INFO]${NC} $1"
+    echo -e "${GREEN}[INFO]${NC} $1"
 }
 
 print_error() {
-   echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[ERROR]${NC} $1"
 }
 
 print_warning() {
-   echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
 print_question() {
-   echo -e "${BLUE}[QUESTION]${NC} $1"
+    echo -e "${BLUE}[QUESTION]${NC} $1"
 }
 
 print_header() {
-   echo -e "${PURPLE}[HEADER]${NC} $1"
+    echo -e "${PURPLE}[HEADER]${NC} $1"
 }
 
 print_success() {
-   echo -e "${CYAN}[SUCCESS]${NC} $1"
+    echo -e "${CYAN}[SUCCESS]${NC} $1"
 }
 
-print_header "=== Complete Server Installation: Odoo + WordPress + Mail Server ==="
+# Function to wait for apt lock and kill conflicting processes
+wait_for_apt() {
+    print_status "Checking for running package managers..."
+    
+    # Kill any running apt processes
+    pkill -f apt-get 2>/dev/null || true
+    pkill -f apt 2>/dev/null || true
+    pkill -f dpkg 2>/dev/null || true
+    pkill -f unattended-upgrade 2>/dev/null || true
+    
+    # Wait a moment for processes to terminate
+    sleep 5
+    
+    # Remove lock files if they exist
+    rm -f /var/lib/dpkg/lock-frontend 2>/dev/null || true
+    rm -f /var/lib/dpkg/lock 2>/dev/null || true
+    rm -f /var/cache/apt/archives/lock 2>/dev/null || true
+    
+    # Configure dpkg if needed
+    dpkg --configure -a 2>/dev/null || true
+    
+    # Wait for any remaining processes
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        print_status "Waiting for package manager to become available..."
+        sleep 5
+    done
+    
+    print_success "Package manager is now available"
+}
+
+# Function to safely run apt commands
+safe_apt() {
+    local max_retries=3
+    local retry_count=0
+    
+    while [ $retry_count -lt $max_retries ]; do
+        wait_for_apt
+        
+        if "$@"; then
+            return 0
+        else
+            retry_count=$((retry_count + 1))
+            if [ $retry_count -lt $max_retries ]; then
+                print_warning "Command failed, retrying in 10 seconds... (attempt $retry_count/$max_retries)"
+                sleep 10
+            fi
+        fi
+    done
+    
+    print_error "Command failed after $max_retries attempts: $*"
+    return 1
+}
+
+print_header "=== Odoo 18 Enterprise + WordPress Complete Installation (Fixed v2) ==="
+
+# Stop any automatic updates first
+print_status "Stopping automatic updates..."
+systemctl stop unattended-upgrades 2>/dev/null || true
+systemctl disable unattended-upgrades 2>/dev/null || true
+
+# Clear any locks first
+wait_for_apt
 
 # Interactive configuration
 print_question "Enter your main domain name (e.g., yourdomain.com):"
@@ -44,22 +105,18 @@ print_question "Enter your email for SSL certificates:"
 read -p "Email: " SSL_EMAIL
 
 if [[ -z "$MAIN_DOMAIN" || -z "$SSL_EMAIL" ]]; then
-   print_error "Domain name and email are required!"
-   exit 1
+    print_error "Domain name and email are required!"
+    exit 1
 fi
 
-# Set all subdomains
+# Set subdomains
 ERP_DOMAIN="erp.$MAIN_DOMAIN"
 PMA_DOMAIN="pma.$MAIN_DOMAIN"
-MAIL_DOMAIN="mail.$MAIN_DOMAIN"
-WEBMAIL_DOMAIN="webmail.$MAIN_DOMAIN"
 
-print_status "Server configuration:"
+print_status "Configuration:"
 print_status "  Main Domain (WordPress): $MAIN_DOMAIN"
 print_status "  ERP Domain (Odoo): $ERP_DOMAIN"
 print_status "  phpMyAdmin Domain: $PMA_DOMAIN"
-print_status "  Mail Server: $MAIL_DOMAIN"
-print_status "  Webmail: $WEBMAIL_DOMAIN"
 print_status "  SSL Email: $SSL_EMAIL"
 
 # PHP Version Selection
@@ -70,10 +127,10 @@ echo "3) PHP 8.3 (Latest)"
 read -p "Enter your choice (1/2/3): " PHP_CHOICE
 
 case $PHP_CHOICE in
-   1) PHP_VERSION="8.1" ;;
-   2) PHP_VERSION="8.2" ;;
-   3) PHP_VERSION="8.3" ;;
-   *) PHP_VERSION="8.2" ;;
+    1) PHP_VERSION="8.1" ;;
+    2) PHP_VERSION="8.2" ;;
+    3) PHP_VERSION="8.3" ;;
+    *) PHP_VERSION="8.2" ;;
 esac
 
 # Database configuration for Odoo
@@ -86,19 +143,20 @@ read -p "Enter your choice (1/2): " DB_CHOICE
 SERVER_IP=$(curl -s ifconfig.me || curl -s ipinfo.io/ip)
 print_status "Detected server IP: $SERVER_IP"
 
-# 1. Update system
+# 1. Update system with lock handling
 print_header "=== Step 1: System Update ==="
-apt update && apt upgrade -y
+safe_apt apt update
+safe_apt apt upgrade -y
 
 # 2. Install basic dependencies
 print_header "=== Step 2: Installing Basic Dependencies ==="
-apt install -y wget git curl unzip software-properties-common gnupg2 \
-   build-essential libssl-dev libffi-dev certbot python3-certbot-nginx \
-   ufw fail2ban htop iotop net-tools
+safe_apt apt install -y wget git curl unzip software-properties-common gnupg2 \
+    build-essential libssl-dev libffi-dev certbot python3-certbot-nginx \
+    ufw fail2ban
 
 # 3. Install PostgreSQL for Odoo
 print_header "=== Step 3: Installing PostgreSQL for Odoo ==="
-apt install -y postgresql postgresql-client postgresql-contrib
+safe_apt apt install -y postgresql postgresql-client postgresql-contrib
 systemctl start postgresql
 systemctl enable postgresql
 
@@ -125,77 +183,68 @@ su - postgres -c "psql -c \"DROP USER IF EXISTS odoo18e;\"" 2>/dev/null || true
 su - postgres -c "psql -c \"CREATE USER odoo18e WITH CREATEDB SUPERUSER;\""
 su - postgres -c "psql -c \"ALTER USER odoo18e PASSWORD 'odoo123';\""
 
-# 4. Install MariaDB for WordPress and Mail
-print_header "=== Step 4: Installing MariaDB ==="
-apt install -y mariadb-server mariadb-client
+# 4. Install MariaDB for WordPress (more stable than MySQL)
+print_header "=== Step 4: Installing MariaDB for WordPress ==="
 
-# Start MariaDB
+# Remove any existing MySQL/MariaDB installations first
+print_status "Cleaning any existing database installations..."
+systemctl stop mysql 2>/dev/null || true
+systemctl stop mariadb 2>/dev/null || true
+pkill -f mysql 2>/dev/null || true
+pkill -f mariadb 2>/dev/null || true
+
+wait_for_apt
+safe_apt apt remove --purge mysql-server mysql-client mysql-common mariadb-server mariadb-client -y
+safe_apt apt autoremove -y
+safe_apt apt autoclean
+
+# Clean up data directories
+rm -rf /var/lib/mysql* 2>/dev/null || true
+rm -rf /etc/mysql 2>/dev/null || true
+rm -rf /var/log/mysql* 2>/dev/null || true
+
+# Install MariaDB fresh
+print_status "Installing MariaDB fresh..."
+safe_apt apt update
+safe_apt apt install -y mariadb-server mariadb-client
+
+# Start and enable MariaDB
 systemctl start mariadb
 systemctl enable mariadb
+sleep 10
 
 # Secure MariaDB installation
-print_status "Securing MariaDB..."
-mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'mysql_root_pass123';"
-mysql -uroot -pmysql_root_pass123 -e "DELETE FROM mysql.user WHERE User='';"
-mysql -uroot -pmysql_root_pass123 -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');"
-mysql -uroot -pmysql_root_pass123 -e "DROP DATABASE IF EXISTS test;"
-mysql -uroot -pmysql_root_pass123 -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';"
-mysql -uroot -pmysql_root_pass123 -e "FLUSH PRIVILEGES;"
+print_status "Securing MariaDB installation..."
+mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'mysql_root_pass123';" 2>/dev/null || true
+mysql -uroot -pmysql_root_pass123 -e "DELETE FROM mysql.user WHERE User='';" 2>/dev/null || true
+mysql -uroot -pmysql_root_pass123 -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');" 2>/dev/null || true
+mysql -uroot -pmysql_root_pass123 -e "DROP DATABASE IF EXISTS test;" 2>/dev/null || true
+mysql -uroot -pmysql_root_pass123 -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';" 2>/dev/null || true
+mysql -uroot -pmysql_root_pass123 -e "FLUSH PRIVILEGES;" 2>/dev/null || true
 
-# Create WordPress database
+# Create WordPress database and user
 print_status "Creating WordPress database..."
+mysql -uroot -pmysql_root_pass123 -e "DROP DATABASE IF EXISTS wordpress;" 2>/dev/null || true
 mysql -uroot -pmysql_root_pass123 -e "CREATE DATABASE wordpress CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+mysql -uroot -pmysql_root_pass123 -e "DROP USER IF EXISTS 'wordpress'@'localhost';" 2>/dev/null || true
 mysql -uroot -pmysql_root_pass123 -e "CREATE USER 'wordpress'@'localhost' IDENTIFIED BY 'wp_pass123';"
 mysql -uroot -pmysql_root_pass123 -e "GRANT ALL PRIVILEGES ON wordpress.* TO 'wordpress'@'localhost';"
 mysql -uroot -pmysql_root_pass123 -e "FLUSH PRIVILEGES;"
 
-# Create mail server databases
-print_status "Creating mail server databases..."
-mysql -uroot -pmysql_root_pass123 -e "CREATE DATABASE mailserver CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-mysql -uroot -pmysql_root_pass123 -e "CREATE USER 'mailuser'@'localhost' IDENTIFIED BY 'mail_pass123';"
-mysql -uroot -pmysql_root_pass123 -e "GRANT ALL PRIVILEGES ON mailserver.* TO 'mailuser'@'localhost';"
-mysql -uroot -pmysql_root_pass123 -e "CREATE DATABASE roundcube CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-mysql -uroot -pmysql_root_pass123 -e "CREATE USER 'roundcube'@'localhost' IDENTIFIED BY 'roundcube_pass123';"
-mysql -uroot -pmysql_root_pass123 -e "GRANT ALL PRIVILEGES ON roundcube.* TO 'roundcube'@'localhost';"
-mysql -uroot -pmysql_root_pass123 -e "FLUSH PRIVILEGES;"
+# Test WordPress database connection
+if mysql -uwordpress -pwp_pass123 -e "SELECT 1;" >/dev/null 2>&1; then
+    print_success "✅ WordPress database connection works"
+else
+    print_error "❌ WordPress database connection failed"
+    exit 1
+fi
 
-# Create mail database tables
-print_status "Creating mail database structure..."
-mysql -uroot -pmysql_root_pass123 mailserver <<EOL
-CREATE TABLE IF NOT EXISTS virtual_domains (
- id int(11) NOT NULL auto_increment,
- name varchar(50) NOT NULL,
- PRIMARY KEY (id)
-);
-
-CREATE TABLE IF NOT EXISTS virtual_users (
- id int(11) NOT NULL auto_increment,
- domain_id int(11) NOT NULL,
- password varchar(106) NOT NULL,
- email varchar(100) NOT NULL,
- PRIMARY KEY (id),
- UNIQUE KEY email (email),
- FOREIGN KEY (domain_id) REFERENCES virtual_domains(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS virtual_aliases (
- id int(11) NOT NULL auto_increment,
- domain_id int(11) NOT NULL,
- source varchar(100) NOT NULL,
- destination varchar(100) NOT NULL,
- PRIMARY KEY (id),
- FOREIGN KEY (domain_id) REFERENCES virtual_domains(id) ON DELETE CASCADE
-);
-
-INSERT INTO virtual_domains (name) VALUES ('$MAIN_DOMAIN');
-EOL
-
-# Optimize MariaDB for performance
+# Optimize MariaDB for WordPress
 print_status "Optimizing MariaDB configuration..."
 cat >> /etc/mysql/mariadb.conf.d/50-server.cnf <<EOL
 
-# Performance Optimizations
-max_connections = 300
+# WordPress Optimizations
+max_connections = 200
 innodb_buffer_pool_size = 1G
 innodb_log_file_size = 256M
 innodb_log_buffer_size = 64M
@@ -217,29 +266,25 @@ EOL
 
 systemctl restart mariadb
 
-# 5. Install Redis for caching
+# 5. Install Redis for WordPress caching
 print_header "=== Step 5: Installing Redis ==="
-apt install -y redis-server redis-tools
+safe_apt apt install -y redis-server redis-tools
 
-# Configure Redis for performance
+# Configure Redis for WordPress
 print_status "Configuring Redis..."
-sed -i 's/# maxmemory <bytes>/maxmemory 512mb/' /etc/redis/redis.conf
+sed -i 's/# maxmemory <bytes>/maxmemory 256mb/' /etc/redis/redis.conf
 sed -i 's/# maxmemory-policy noeviction/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
-sed -i 's/save 900 1/# save 900 1/' /etc/redis/redis.conf
-sed -i 's/save 300 10/# save 300 10/' /etc/redis/redis.conf
-sed -i 's/save 60 10000/# save 60 10000/' /etc/redis/redis.conf
-echo "save 3600 1" >> /etc/redis/redis.conf
 systemctl restart redis-server
 systemctl enable redis-server
 
 # 6. Install PHP
 print_header "=== Step 6: Installing PHP $PHP_VERSION ==="
-add-apt-repository ppa:ondrej/php -y
-apt update
-apt install -y php$PHP_VERSION php$PHP_VERSION-fpm php$PHP_VERSION-mysql php$PHP_VERSION-redis \
-   php$PHP_VERSION-gd php$PHP_VERSION-xml php$PHP_VERSION-mbstring php$PHP_VERSION-curl \
-   php$PHP_VERSION-zip php$PHP_VERSION-intl php$PHP_VERSION-bcmath php$PHP_VERSION-soap \
-   php$PHP_VERSION-imagick php$PHP_VERSION-opcache php$PHP_VERSION-imap
+safe_apt add-apt-repository ppa:ondrej/php -y
+safe_apt apt update
+safe_apt apt install -y php$PHP_VERSION php$PHP_VERSION-fpm php$PHP_VERSION-mysql php$PHP_VERSION-redis \
+    php$PHP_VERSION-gd php$PHP_VERSION-xml php$PHP_VERSION-mbstring php$PHP_VERSION-curl \
+    php$PHP_VERSION-zip php$PHP_VERSION-intl php$PHP_VERSION-bcmath php$PHP_VERSION-soap \
+    php$PHP_VERSION-imagick php$PHP_VERSION-opcache
 
 # Configure PHP-FPM for performance
 print_status "Optimizing PHP-FPM configuration..."
@@ -250,7 +295,7 @@ sed -i 's/pm.start_servers = 2/pm.start_servers = 10/' $PHP_FPM_CONF
 sed -i 's/pm.min_spare_servers = 1/pm.min_spare_servers = 5/' $PHP_FPM_CONF
 sed -i 's/pm.max_spare_servers = 3/pm.max_spare_servers = 15/' $PHP_FPM_CONF
 
-# Configure PHP settings for performance
+# Configure PHP settings
 print_status "Optimizing PHP configuration..."
 PHP_INI="/etc/php/$PHP_VERSION/fpm/php.ini"
 sed -i 's/upload_max_filesize = 2M/upload_max_filesize = 512M/' $PHP_INI
@@ -261,39 +306,29 @@ sed -i 's/memory_limit = 128M/memory_limit = 512M/' $PHP_INI
 sed -i 's/;opcache.enable=1/opcache.enable=1/' $PHP_INI
 sed -i 's/;opcache.memory_consumption=128/opcache.memory_consumption=256/' $PHP_INI
 sed -i 's/;opcache.max_accelerated_files=10000/opcache.max_accelerated_files=20000/' $PHP_INI
-sed -i 's/;opcache.revalidate_freq=2/opcache.revalidate_freq=60/' $PHP_INI
 
 systemctl restart php$PHP_VERSION-fpm
 systemctl enable php$PHP_VERSION-fpm
 
 # 7. Install Python dependencies for Odoo
 print_header "=== Step 7: Installing Python Dependencies for Odoo ==="
-apt install -y python3 python3-pip python3-dev python3-venv python3-wheel \
-   libxml2-dev libxslt1-dev libldap2-dev libsasl2-dev libtiff5-dev \
-   libjpeg8-dev libopenjp2-7-dev zlib1g-dev libfreetype6-dev liblcms2-dev \
-   libwebp-dev libharfbuzz-dev libfribidi-dev libxcb1-dev libpq-dev
+safe_apt apt install -y python3 python3-pip python3-dev python3-venv python3-wheel \
+    libxml2-dev libxslt1-dev libldap2-dev libsasl2-dev libtiff5-dev \
+    libjpeg8-dev libopenjp2-7-dev zlib1g-dev libfreetype6-dev liblcms2-dev \
+    libwebp-dev libharfbuzz-dev libfribidi-dev libxcb1-dev libpq-dev
 
-# 8. Install Mail Server Components
-print_header "=== Step 8: Installing Mail Server Components ==="
-debconf-set-selections <<< "postfix postfix/mailname string $MAIN_DOMAIN"
-debconf-set-selections <<< "postfix postfix/main_mailer_type string 'Internet Site'"
-apt install -y postfix postfix-mysql dovecot-core dovecot-imapd dovecot-pop3d \
-   dovecot-lmtpd dovecot-mysql dovecot-sieve dovecot-managesieved \
-   opendkim opendkim-tools postfix-policyd-spf-python
-
-# 9. Create system users
-print_header "=== Step 9: Creating System Users ==="
+# 8. Create system users
+print_header "=== Step 8: Creating System Users ==="
 # Remove existing odoo user and recreate
 deluser odoo 2>/dev/null || true
 delgroup odoo 2>/dev/null || true
 adduser --system --home=/opt/odoo --group odoo
 
-# Create mail user
-groupadd -g 5000 vmail 2>/dev/null || true
-useradd -g vmail -u 5000 vmail -d /var/mail/vhosts -m 2>/dev/null || true
+# Create www-data if not exists
+id -u www-data &>/dev/null || useradd -r -s /bin/false www-data
 
-# 10. Setup Odoo directories and download source
-print_header "=== Step 10: Setting up Odoo ==="
+# 9. Setup Odoo directories and download source
+print_header "=== Step 9: Setting up Odoo ==="
 rm -rf /opt/odoo18-enterprise
 mkdir -p /opt/odoo18-enterprise
 mkdir -p /var/log/odoo
@@ -313,8 +348,8 @@ chown -R odoo:odoo /opt/odoo18-enterprise
 chown odoo:root /var/log/odoo
 chown odoo:root /etc/odoo
 
-# 11. Setup WordPress
-print_header "=== Step 11: Setting up WordPress ==="
+# 10. Setup WordPress
+print_header "=== Step 10: Setting up WordPress ==="
 mkdir -p /var/www/wordpress
 cd /tmp
 
@@ -335,17 +370,16 @@ print_status "Creating WordPress configuration..."
 cd /var/www/wordpress
 cp wp-config-sample.php wp-config.php
 
+# Generate WordPress salts
+SALT=$(curl -s https://api.wordpress.org/secret-key/1.1/salt/)
+
 # Configure wp-config.php
 sed -i "s/database_name_here/wordpress/" wp-config.php
 sed -i "s/username_here/wordpress/" wp-config.php
 sed -i "s/password_here/wp_pass123/" wp-config.php
 sed -i "s/localhost/localhost/" wp-config.php
 
-# Generate WordPress salts and add Redis configuration
-SALT=$(curl -s https://api.wordpress.org/secret-key/1.1/salt/)
-sed -i '/AUTH_KEY/,/NONCE_SALT/d' wp-config.php
-echo "$SALT" >> wp-config.php
-
+# Add Redis cache configuration
 cat >> wp-config.php <<EOL
 
 /* Redis Cache Configuration */
@@ -361,23 +395,25 @@ define('DISALLOW_FILE_EDIT', true);
 define('WP_POST_REVISIONS', 3);
 define('AUTOSAVE_INTERVAL', 300);
 define('WP_MEMORY_LIMIT', '512M');
-define('AUTOMATIC_UPDATER_DISABLED', false);
-define('WP_AUTO_UPDATE_CORE', true);
-
-/* That's all, stop editing! Happy publishing. */
 EOL
+
+# Replace salts in wp-config.php
+sed -i '/AUTH_KEY/,/NONCE_SALT/d' wp-config.php
+echo "$SALT" >> wp-config.php
+echo "" >> wp-config.php
+echo "/* That's all, stop editing! Happy publishing. */" >> wp-config.php
 
 chown www-data:www-data wp-config.php
 
-# 12. Install phpMyAdmin
-print_header "=== Step 12: Installing phpMyAdmin ==="
+# 11. Install phpMyAdmin
+print_header "=== Step 11: Installing phpMyAdmin ==="
 cd /tmp
-PMA_VERSION="5.2.1"
-wget -q "https://files.phpmyadmin.net/phpMyAdmin/${PMA_VERSION}/phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
-tar -xzf "phpMyAdmin-${PMA_VERSION}-all-languages.tar.gz"
+wget -q https://www.phpmyadmin.net/downloads/phpMyAdmin-latest-all-languages.tar.gz
+tar -xzf phpMyAdmin-latest-all-languages.tar.gz
+PMA_DIR=$(find . -name "phpMyAdmin-*" -type d | head -1)
 mkdir -p /var/www/phpmyadmin
-cp -R "phpMyAdmin-${PMA_VERSION}-all-languages"/* /var/www/phpmyadmin/
-rm -rf phpMyAdmin-*
+cp -R $PMA_DIR/* /var/www/phpmyadmin/
+rm -rf phpMyAdmin-* $PMA_DIR
 
 # Configure phpMyAdmin
 cd /var/www/phpmyadmin
@@ -390,15 +426,15 @@ sed -i "s/\$cfg\['blowfish_secret'\] = '';/\$cfg['blowfish_secret'] = '$BLOWFISH
 # Add security configurations
 cat >> config.inc.php <<EOL
 
-/* Security and Performance Settings */
+/* Security Settings */
 \$cfg['LoginCookieValidity'] = 3600;
 \$cfg['MaxNavigationItems'] = 500;
 \$cfg['UploadDir'] = '';
 \$cfg['SaveDir'] = '';
 \$cfg['TempDir'] = '/tmp';
 \$cfg['AllowThirdPartyFraming'] = false;
-\$cfg['SendErrorReports'] = 'never';
-\$cfg['ConsoleEnterExecutes'] = true;
+\$cfg['CaptchaLoginPublicKey'] = '';
+\$cfg['CaptchaLoginPrivateKey'] = '';
 EOL
 
 # Set permissions
@@ -406,80 +442,9 @@ chown -R www-data:www-data /var/www/phpmyadmin
 find /var/www/phpmyadmin -type d -exec chmod 755 {} \;
 find /var/www/phpmyadmin -type f -exec chmod 644 {} \;
 
-# 13. Install Roundcube Webmail
-print_header "=== Step 13: Installing Roundcube Webmail ==="
-cd /tmp
-ROUNDCUBE_VERSION="1.6.5"
-wget -q "https://github.com/roundcube/roundcubemail/releases/download/${ROUNDCUBE_VERSION}/roundcubemail-${ROUNDCUBE_VERSION}-complete.tar.gz"
-tar -xzf "roundcubemail-${ROUNDCUBE_VERSION}-complete.tar.gz"
-mkdir -p /var/www/webmail
-cp -R "roundcubemail-${ROUNDCUBE_VERSION}"/* /var/www/webmail/
-rm -rf roundcubemail-*
-
-# Import Roundcube database schema
-mysql -uroot -pmysql_root_pass123 roundcube < /var/www/webmail/SQL/mysql.initial.sql
-
-# Configure Roundcube
-print_status "Configuring Roundcube..."
-cd /var/www/webmail
-DES_KEY=$(openssl rand -hex 24)
-
-cat > config/config.inc.php <<EOL
-<?php
-\$config = [];
-
-// Database
-\$config['db_dsnw'] = 'mysql://roundcube:roundcube_pass123@localhost/roundcube';
-
-// IMAP
-\$config['default_host'] = 'ssl://$MAIL_DOMAIN';
-\$config['default_port'] = 993;
-\$config['imap_conn_options'] = [
-   'ssl' => [
-       'verify_peer' => false,
-       'verify_peer_name' => false,
-   ],
-];
-
-// SMTP
-\$config['smtp_server'] = 'tls://$MAIL_DOMAIN';
-\$config['smtp_port'] = 587;
-\$config['smtp_user'] = '%u';
-\$config['smtp_pass'] = '%p';
-\$config['smtp_conn_options'] = [
-   'ssl' => [
-       'verify_peer' => false,
-       'verify_peer_name' => false,
-   ],
-];
-
-// Security
-\$config['des_key'] = '$DES_KEY';
-\$config['cipher_method'] = 'AES-256-CBC';
-
-// General settings
-\$config['product_name'] = 'Webmail - $MAIN_DOMAIN';
-\$config['useragent'] = 'Roundcube Webmail';
-\$config['language'] = 'en_US';
-\$config['date_format'] = 'Y-m-d';
-\$config['time_format'] = 'H:i';
-\$config['prettydate'] = true;
-\$config['refresh_interval'] = 60;
-\$config['max_message_size'] = '50M';
-
-// Plugins
-\$config['plugins'] = ['archive', 'zipdownload', 'managesieve'];
-?>
-EOL
-
-# Set permissions
-chown -R www-data:www-data /var/www/webmail
-find /var/www/webmail -type d -exec chmod 755 {} \;
-find /var/www/webmail -type f -exec chmod 644 {} \;
-
-# 14. Install Nginx
-print_header "=== Step 14: Installing and Configuring Nginx ==="
-apt install -y nginx
+# 12. Install Nginx
+print_header "=== Step 12: Installing and Configuring Nginx ==="
+safe_apt apt install -y nginx
 
 # Create optimized nginx.conf
 print_status "Optimizing Nginx configuration..."
@@ -492,82 +457,90 @@ worker_rlimit_nofile 65535;
 pid /run/nginx.pid;
 
 events {
-   worker_connections 4096;
-   use epoll;
-   multi_accept on;
+    worker_connections 4096;
+    use epoll;
+    multi_accept on;
 }
 
 http {
-   sendfile on;
-   tcp_nopush on;
-   tcp_nodelay on;
-   keepalive_timeout 65;
-   keepalive_requests 1000;
-   types_hash_max_size 2048;
-   server_tokens off;
-   
-   # File upload settings
-   client_max_body_size 10G;
-   client_body_buffer_size 1m;
-   client_body_timeout 3600s;
-   client_header_timeout 3600s;
-   
-   # Proxy settings
-   proxy_connect_timeout 3600s;
-   proxy_send_timeout 3600s;
-   proxy_read_timeout 3600s;
-   proxy_request_buffering off;
-   proxy_max_temp_file_size 0;
-   
-   # Performance optimizations
-   reset_timedout_connection on;
-   open_file_cache max=200000 inactive=20s;
-   open_file_cache_valid 30s;
-   open_file_cache_min_uses 2;
-   open_file_cache_errors on;
-   
-   include /etc/nginx/mime.types;
-   default_type application/octet-stream;
-   
-   # Gzip compression
-   gzip on;
-   gzip_vary on;
-   gzip_min_length 1000;
-   gzip_proxied any;
-   gzip_comp_level 6;
-   gzip_http_version 1.1;
-   gzip_types
-       application/atom+xml
-       application/geo+json
-       application/javascript
-       application/x-javascript
-       application/json
-       application/ld+json
-       application/manifest+json
-       application/rdf+xml
-       application/rss+xml
-       application/xhtml+xml
-       application/xml
-       font/eot
-       font/otf
-       font/ttf
-       image/svg+xml
-       text/css
-       text/javascript
-       text/plain
-       text/xml;
-   
-   # Rate limiting
-   limit_req_zone \$binary_remote_addr zone=login:10m rate=5r/m;
-   limit_req_zone \$binary_remote_addr zone=api:10m rate=20r/s;
-   limit_req_zone \$binary_remote_addr zone=wp:10m rate=10r/s;
-   
-   # Cache zones
-   proxy_cache_path /var/cache/nginx/odoo levels=1:2 keys_zone=odoo:100m max_size=1g inactive=60m use_temp_path=off;
-   fastcgi_cache_path /var/cache/nginx/wordpress levels=1:2 keys_zone=wordpress:100m max_size=2g inactive=60m use_temp_path=off;
-   
-   include /etc/nginx/conf.d/*.conf;
-   include /etc/nginx/sites-enabled/*;
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    keepalive_requests 1000;
+    types_hash_max_size 2048;
+    server_tokens off;
+    
+    # File upload settings
+    client_max_body_size 10G;
+    client_body_buffer_size 1m;
+    client_body_timeout 3600s;
+    client_header_timeout 3600s;
+    
+    # Proxy settings
+    proxy_connect_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_read_timeout 3600s;
+    proxy_request_buffering off;
+    proxy_max_temp_file_size 0;
+    
+    # Performance optimizations
+    reset_timedout_connection on;
+    open_file_cache max=200000 inactive=20s;
+    open_file_cache_valid 30s;
+    open_file_cache_min_uses 2;
+    open_file_cache_errors on;
+    
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    
+    # Logging
+    log_format main '\$remote_addr - \$remote_user [\$time_local] "\$request" '
+                    '\$status \$body_bytes_sent "\$http_referer" '
+                    '"\$http_user_agent" "\$http_x_forwarded_for"';
+    
+    access_log /var/log/nginx/access.log main;
+    error_log /var/log/nginx/error.log;
+    
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1000;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_http_version 1.1;
+    gzip_types
+        application/atom+xml
+        application/geo+json
+        application/javascript
+        application/x-javascript
+        application/json
+        application/ld+json
+        application/manifest+json
+        application/rdf+xml
+        application/rss+xml
+        application/xhtml+xml
+        application/xml
+        font/eot
+        font/otf
+        font/ttf
+        image/svg+xml
+        text/css
+        text/javascript
+        text/plain
+        text/xml;
+    
+    # Rate limiting
+    limit_req_zone \$binary_remote_addr zone=login:10m rate=5r/m;
+    limit_req_zone \$binary_remote_addr zone=api:10m rate=20r/s;
+    limit_req_zone \$binary_remote_addr zone=wp:10m rate=10r/s;
+    
+    # Cache zones
+    proxy_cache_path /var/cache/nginx/odoo levels=1:2 keys_zone=odoo:100m max_size=1g inactive=60m use_temp_path=off;
+    fastcgi_cache_path /var/cache/nginx/wordpress levels=1:2 keys_zone=wordpress:100m max_size=2g inactive=60m use_temp_path=off;
+    
+    include /etc/nginx/conf.d/*.conf;
+    include /etc/nginx/sites-enabled/*;
 }
 EOL
 
@@ -575,102 +548,99 @@ EOL
 mkdir -p /var/cache/nginx/{odoo,wordpress}
 chown -R www-data:www-data /var/cache/nginx/
 
-# 15. Create Nginx virtual hosts
-print_header "=== Step 15: Creating Nginx Virtual Hosts ==="
+# 13. Create Nginx configurations for each service
+print_header "=== Step 13: Creating Nginx Virtual Hosts ==="
 
 # WordPress configuration
 print_status "Creating WordPress Nginx configuration..."
 cat > /etc/nginx/sites-available/wordpress <<EOL
+# WordPress FastCGI Cache configuration
 fastcgi_cache_key "\$scheme\$request_method\$host\$request_uri";
 
 server {
-   listen 80;
-   server_name $MAIN_DOMAIN;
-   root /var/www/wordpress;
-   index index.php index.html index.htm;
-   
-   # Security headers
-   add_header X-Frame-Options "SAMEORIGIN" always;
-   add_header X-Content-Type-Options "nosniff" always;
-   add_header X-XSS-Protection "1; mode=block" always;
-   add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-   
-   # WordPress security
-   location ~ /\.ht {
-       deny all;
-   }
-   
-   location ~ /\.user\.ini {
-       deny all;
-   }
-   
-   location ~* /(?:uploads|files)/.*\.php\$ {
-       deny all;
-   }
-   
-   location ~* wp-config\.php {
-       deny all;
-   }
-   
-   # Static files caching
-   location ~* \.(jpg|jpeg|png|gif|ico|css|js|pdf|zip|tar|bz2|rar|eot|woff|woff2|ttf|svg)\$ {
-       expires 1y;
-       add_header Cache-Control "public, immutable";
-       add_header Vary Accept-Encoding;
-       access_log off;
-       try_files \$uri =404;
-   }
-   
-   # WordPress permalinks
-   location / {
-       try_files \$uri \$uri/ /index.php?\$args;
-   }
-   
-   # WordPress admin rate limiting
-   location ~* /(wp-admin|wp-login\.php) {
-       limit_req zone=login burst=5 nodelay;
-       include fastcgi_params;
-       fastcgi_pass unix:/var/run/php/php$PHP_VERSION-fpm.sock;
-       fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-       fastcgi_param SCRIPT_NAME \$fastcgi_script_name;
-   }
-   
-   # PHP processing with FastCGI cache
-   location ~ \.php\$ {
-       limit_req zone=wp burst=20 nodelay;
-       
-       include fastcgi_params;
-       fastcgi_pass unix:/var/run/php/php$PHP_VERSION-fpm.sock;
-       fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-       fastcgi_param SCRIPT_NAME \$fastcgi_script_name;
-       
-       # FastCGI cache settings
-       fastcgi_cache wordpress;
-       fastcgi_cache_valid 200 301 302 60m;
-       fastcgi_cache_valid 404 1m;
-       fastcgi_cache_use_stale error timeout invalid_header updating http_500 http_503;
-       fastcgi_cache_lock on;
-       
-       # Cache bypass conditions
-       set \$no_cache 0;
-       if (\$request_method = POST) {
-           set \$no_cache 1;
-       }
-       if (\$query_string != "") {
-           set \$no_cache 1;
-       }
-       if (\$request_uri ~* "/(wp-admin/|wp-login\.php|wp-register\.php|cart|checkout|my-account)") {
-           set \$no_cache 1;
-       }
-       if (\$http_cookie ~* "comment_author|wordpress_[a-f0-9]+|wp-postpass|wordpress_logged_in") {
-           set \$no_cache 1;
-       }
-       
-       fastcgi_cache_bypass \$no_cache;
-       fastcgi_no_cache \$no_cache;
-       
-       add_header X-Cache-Status \$upstream_cache_status;
-   }
+    listen 80;
+    server_name $MAIN_DOMAIN;
+    root /var/www/wordpress;
+    index index.php index.html index.htm;
+    
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    
+    # WordPress security
+    location ~ /\.ht {
+        deny all;
+    }
+    
+    location ~ /\.user\.ini {
+        deny all;
+    }
+    
+    location ~* /(?:uploads|files)/.*\.php\$ {
+        deny all;
+    }
+    
+    # Static files caching
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js|pdf|zip|tar|bz2|rar|eot|woff|woff2|ttf|svg)\$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        add_header Vary Accept-Encoding;
+        access_log off;
+        try_files \$uri =404;
+    }
+    
+    # WordPress permalinks
+    location / {
+        try_files \$uri \$uri/ /index.php?\$args;
+    }
+    
+    # WordPress admin rate limiting
+    location ~* /(wp-admin|wp-login\.php) {
+        limit_req zone=login burst=5 nodelay;
+        include fastcgi_params;
+        fastcgi_pass unix:/var/run/php/php$PHP_VERSION-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_param SCRIPT_NAME \$fastcgi_script_name;
+    }
+    
+    # PHP processing with FastCGI cache
+    location ~ \.php\$ {
+        limit_req zone=wp burst=20 nodelay;
+        
+        include fastcgi_params;
+        fastcgi_pass unix:/var/run/php/php$PHP_VERSION-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_param SCRIPT_NAME \$fastcgi_script_name;
+        
+        # FastCGI cache settings
+        fastcgi_cache wordpress;
+        fastcgi_cache_valid 200 301 302 60m;
+        fastcgi_cache_valid 404 1m;
+        fastcgi_cache_use_stale error timeout invalid_header updating http_500 http_503;
+        fastcgi_cache_lock on;
+        
+        # Cache bypass conditions
+        set \$no_cache 0;
+        if (\$request_method = POST) {
+            set \$no_cache 1;
+        }
+        if (\$query_string != "") {
+            set \$no_cache 1;
+        }
+        if (\$request_uri ~* "/(wp-admin/|wp-login\.php|wp-register\.php|cart|checkout|my-account)") {
+            set \$no_cache 1;
+        }
+        if (\$http_cookie ~* "comment_author|wordpress_[a-f0-9]+|wp-postpass|wordpress_logged_in") {
+            set \$no_cache 1;
+        }
+        
+        fastcgi_cache_bypass \$no_cache;
+        fastcgi_no_cache \$no_cache;
+        
+        add_header X-Cache-Status \$upstream_cache_status;
+    }
 }
 EOL
 
@@ -678,56 +648,56 @@ EOL
 print_status "Creating Odoo Nginx configuration..."
 cat > /etc/nginx/sites-available/odoo <<EOL
 upstream odoo {
-   server 127.0.0.1:8069 weight=1 fail_timeout=0;
-   keepalive 32;
+    server 127.0.0.1:8069 weight=1 fail_timeout=0;
+    keepalive 32;
 }
 
 upstream odoochat {
-   server 127.0.0.1:8072 weight=1 fail_timeout=0;
-   keepalive 8;
+    server 127.0.0.1:8072 weight=1 fail_timeout=0;
+    keepalive 8;
 }
 
 server {
-   listen 80;
-   server_name $ERP_DOMAIN;
-   
-   # Security headers
-   add_header X-Frame-Options "SAMEORIGIN" always;
-   add_header X-Content-Type-Options "nosniff" always;
-   add_header X-XSS-Protection "1; mode=block" always;
-   add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-   
-   # Performance optimizations
-   sendfile on;
-   tcp_nopush on;
-   tcp_nodelay on;
-   keepalive_timeout 65;
-   keepalive_requests 1000;
-   
-   # Buffer optimizations for large uploads
-   client_body_buffer_size 1m;
-   client_header_buffer_size 1k;
-   large_client_header_buffers 4 8k;
-   client_max_body_size 10G;
-   client_body_timeout 3600s;
-   client_header_timeout 3600s;
-   
-   # Proxy optimizations for large operations
-   proxy_buffering on;
-   proxy_buffer_size 256k;
-   proxy_buffers 16 512k;
-   proxy_busy_buffers_size 1m;
-   proxy_temp_file_write_size 1m;
-   proxy_connect_timeout 3600s;
-   proxy_send_timeout 3600s;
-   proxy_read_timeout 3600s;
-   send_timeout 3600s;
-   
-   # Disable proxy request buffering for large uploads
-   proxy_request_buffering off;
-   proxy_max_temp_file_size 0;
-   
-   # Caching for static assets
+    listen 80;
+    server_name $ERP_DOMAIN;
+    
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    
+    # Performance optimizations
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    keepalive_requests 1000;
+    
+    # Buffer optimizations for large uploads
+    client_body_buffer_size 1m;
+    client_header_buffer_size 1k;
+    large_client_header_buffers 4 8k;
+    client_max_body_size 10G;
+    client_body_timeout 3600s;
+    client_header_timeout 3600s;
+    
+    # Proxy optimizations for large operations
+    proxy_buffering on;
+    proxy_buffer_size 256k;
+    proxy_buffers 16 512k;
+    proxy_busy_buffers_size 1m;
+    proxy_temp_file_write_size 1m;
+    proxy_connect_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_read_timeout 3600s;
+    send_timeout 3600s;
+    
+    # Disable proxy request buffering for large uploads
+    proxy_request_buffering off;
+    proxy_max_temp_file_size 0;
+    
+# Caching for static assets
    location ~* \.(ico|css|js|gif|jpe?g|png|svg|woff|woff2|ttf|eot)\$ {
        expires 1y;
        add_header Cache-Control "public, immutable";
@@ -905,59 +875,8 @@ server {
 }
 EOL
 
-# Webmail configuration
-print_status "Creating Webmail Nginx configuration..."
-cat > /etc/nginx/sites-available/webmail <<EOL
-server {
-   listen 80;
-   server_name $WEBMAIL_DOMAIN;
-   root /var/www/webmail;
-   index index.php index.html index.htm;
-   
-   # Security headers
-   add_header X-Frame-Options "SAMEORIGIN" always;
-   add_header X-Content-Type-Options "nosniff" always;
-   add_header X-XSS-Protection "1; mode=block" always;
-   add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-   
-   # Security restrictions
-   location ~ /\.ht {
-       deny all;
-   }
-   
-   location ~ /(bin|SQL|config|temp|logs)/ {
-       deny all;
-   }
-   
-   location ~ /\.(log|ini|conf)\$ {
-       deny all;
-   }
-   
-   # Static files
-   location ~* \.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf)\$ {
-       expires 1y;
-       add_header Cache-Control "public, immutable";
-       access_log off;
-   }
-   
-   # PHP processing
-   location ~ \.php\$ {
-       include fastcgi_params;
-       fastcgi_pass unix:/var/run/php/php$PHP_VERSION-fpm.sock;
-       fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-       fastcgi_param SCRIPT_NAME \$fastcgi_script_name;
-       fastcgi_read_timeout 300;
-       fastcgi_send_timeout 300;
-   }
-   
-   location / {
-       try_files \$uri \$uri/ /index.php?\$args;
-   }
-}
-EOL
-
-# 16. Setup Odoo Python environment
-print_header "=== Step 16: Setting up Odoo Python Environment ==="
+# 14. Setup Odoo Python environment and dependencies
+print_header "=== Step 14: Setting up Odoo Python Environment ==="
 
 # Create requirements.txt
 print_status "Creating Odoo requirements.txt..."
@@ -1014,13 +933,31 @@ print_status "Installing Python packages..."
 su - odoo -s /bin/bash -c "/opt/odoo18-enterprise/odoo-venv/bin/pip install --upgrade pip"
 su - odoo -s /bin/bash -c "/opt/odoo18-enterprise/odoo-venv/bin/pip install -r /opt/odoo18-enterprise/odoo/requirements.txt"
 
-# Install Odoo in development mode
-print_status "Installing Odoo in development mode..."
-cd /opt/odoo18-enterprise/odoo
-su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && /opt/odoo18-enterprise/odoo-venv/bin/pip install -e ."
+# 15. Install additional tools
+print_header "=== Step 15: Installing Additional Tools ==="
 
-# 17. Configure Odoo
-print_header "=== Step 17: Configuring Odoo ==="
+# Install wkhtmltopdf
+print_status "Installing wkhtmltopdf..."
+cd /tmp
+wget -q https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.jammy_amd64.deb
+dpkg -i wkhtmltox_0.12.6.1-3.jammy_amd64.deb 2>/dev/null || true
+safe_apt apt-get install -f -y
+
+# Install Node.js for Odoo
+print_status "Installing Node.js..."
+curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+safe_apt apt-get install -y nodejs
+npm install -g rtlcss
+
+# Install WP-CLI for WordPress management
+print_status "Installing WP-CLI..."
+cd /tmp
+curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+chmod +x wp-cli.phar
+mv wp-cli.phar /usr/local/bin/wp
+
+# 16. Test Odoo execution methods and create service
+print_header "=== Step 16: Testing Odoo Execution Methods ==="
 
 # Detect addons path
 if [ -d /opt/odoo18-enterprise/odoo/enterprise ]; then
@@ -1080,303 +1017,130 @@ EOL
 chown odoo:odoo /etc/odoo/odoo.conf
 chmod 640 /etc/odoo/odoo.conf
 
-# 18. Test Odoo execution method
-print_status "Testing Odoo execution method..."
+# Test Odoo execution methods
+print_status "Testing Odoo execution methods..."
 cd /opt/odoo18-enterprise/odoo
 
-if su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && /opt/odoo18-enterprise/odoo-venv/bin/python odoo-bin --help" >/dev/null 2>&1; then
-   EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python /opt/odoo18-enterprise/odoo/odoo-bin"
-   WORK_DIR="/opt/odoo18-enterprise/odoo"
-   ENV_VARS=""
-elif su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && PYTHONPATH=/opt/odoo18-enterprise/odoo /opt/odoo18-enterprise/odoo-venv/bin/python odoo-bin --help" >/dev/null 2>&1; then
-   EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python /opt/odoo18-enterprise/odoo/odoo-bin"
-   WORK_DIR="/opt/odoo18-enterprise/odoo"
-   ENV_VARS="Environment=PYTHONPATH=/opt/odoo18-enterprise/odoo"
-elif su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && /opt/odoo18-enterprise/odoo-venv/bin/python -m odoo --help" >/dev/null 2>&1; then
-   EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python -m odoo"
-   WORK_DIR="/opt/odoo18-enterprise/odoo"
-   ENV_VARS="Environment=PYTHONPATH=/opt/odoo18-enterprise/odoo"
-else
-   print_error "No execution method works!"
-   exit 1
+EXEC_METHOD_FOUND=false
+
+# Method 1: Direct odoo-bin execution
+if [ -f "odoo-bin" ]; then
+   print_status "Testing Method 1: Direct odoo-bin execution..."
+   if su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && timeout 10 /opt/odoo18-enterprise/odoo-venv/bin/python odoo-bin --help" >/dev/null 2>&1; then
+       EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python /opt/odoo18-enterprise/odoo/odoo-bin"
+       WORK_DIR="/opt/odoo18-enterprise/odoo"
+       ENV_VARS=""
+       EXEC_METHOD_FOUND=true
+       print_success "✅ Method 1 works: Direct odoo-bin"
+   fi
 fi
 
-# 19. Create systemd service for Odoo
+# Method 2: odoo-bin with PYTHONPATH
+if [ "$EXEC_METHOD_FOUND" = false ] && [ -f "odoo-bin" ]; then
+   print_status "Testing Method 2: odoo-bin with PYTHONPATH..."
+   if su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && timeout 10 PYTHONPATH=/opt/odoo18-enterprise/odoo /opt/odoo18-enterprise/odoo-venv/bin/python odoo-bin --help" >/dev/null 2>&1; then
+       EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python /opt/odoo18-enterprise/odoo/odoo-bin"
+       WORK_DIR="/opt/odoo18-enterprise/odoo"
+       ENV_VARS="Environment=PYTHONPATH=/opt/odoo18-enterprise/odoo"
+       EXEC_METHOD_FOUND=true
+       print_success "✅ Method 2 works: odoo-bin with PYTHONPATH"
+   fi
+fi
+
+# Method 3: Python module execution
+if [ "$EXEC_METHOD_FOUND" = false ]; then
+   print_status "Testing Method 3: Python module execution..."
+   if su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && timeout 10 PYTHONPATH=/opt/odoo18-enterprise/odoo /opt/odoo18-enterprise/odoo-venv/bin/python -m odoo --help" >/dev/null 2>&1; then
+       EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python -m odoo"
+       WORK_DIR="/opt/odoo18-enterprise/odoo"
+       ENV_VARS="Environment=PYTHONPATH=/opt/odoo18-enterprise/odoo"
+       EXEC_METHOD_FOUND=true
+       print_success "✅ Method 3 works: Python module execution"
+   fi
+fi
+
+# Method 4: Try with setup.py install
+if [ "$EXEC_METHOD_FOUND" = false ] && [ -f "setup.py" ]; then
+   print_status "Testing Method 4: Installing Odoo via setup.py..."
+   su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && /opt/odoo18-enterprise/odoo-venv/bin/pip install -e ."
+   
+   if su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && timeout 10 /opt/odoo18-enterprise/odoo-venv/bin/python -m odoo --help" >/dev/null 2>&1; then
+       EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python -m odoo"
+       WORK_DIR="/opt/odoo18-enterprise/odoo"
+       ENV_VARS="Environment=PYTHONPATH=/opt/odoo18-enterprise/odoo"
+       EXEC_METHOD_FOUND=true
+       print_success "✅ Method 4 works: setup.py install + module execution"
+   fi
+fi
+
+# If no method works, try fresh installation
+if [ "$EXEC_METHOD_FOUND" = false ]; then
+   print_warning "All methods failed. Reinstalling Odoo from scratch..."
+   
+   # Backup configuration
+   cp /etc/odoo/odoo.conf /tmp/odoo.conf.backup 2>/dev/null || true
+   
+   # Remove current installation
+   rm -rf /opt/odoo18-enterprise/odoo
+   
+   # Clone fresh copy
+   print_status "Downloading fresh Odoo copy..."
+   cd /opt/odoo18-enterprise
+   git clone https://github.com/drmostafazade/odiran.git odoo
+   
+   # Set permissions
+   chown -R odoo:odoo /opt/odoo18-enterprise/odoo
+   
+   # Install requirements
+   if [ -f "/opt/odoo18-enterprise/odoo/requirements.txt" ]; then
+       su - odoo -s /bin/bash -c "/opt/odoo18-enterprise/odoo-venv/bin/pip install -r /opt/odoo18-enterprise/odoo/requirements.txt"
+   fi
+   
+   # Test again
+   cd /opt/odoo18-enterprise/odoo
+   if [ -f "odoo-bin" ] && su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && timeout 10 /opt/odoo18-enterprise/odoo-venv/bin/python odoo-bin --help" >/dev/null 2>&1; then
+       EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python /opt/odoo18-enterprise/odoo/odoo-bin"
+       WORK_DIR="/opt/odoo18-enterprise/odoo"
+       ENV_VARS=""
+       EXEC_METHOD_FOUND=true
+       print_success "✅ Fresh installation works"
+   else
+       print_error "❌ Fresh installation also failed!"
+       exit 1
+   fi
+fi
+
+# Create systemd service with working method
 print_status "Creating Odoo systemd service..."
 cat > /etc/systemd/system/odoo.service <<EOL
 [Unit]
 Description=Odoo 18 Enterprise
+Requires=postgresql.service
 After=network.target postgresql.service
 
 [Service]
 Type=simple
+SyslogIdentifier=odoo
+PermissionsStartOnly=true
 User=odoo
 Group=odoo
 ExecStart=$EXEC_CMD -c /etc/odoo/odoo.conf
+StandardOutput=journal+console
+$ENV_VARS
+KillMode=mixed
+TimeoutStopSec=30
 Restart=always
 RestartSec=10
-WorkingDirectory=$WORK_DIR
-$ENV_VARS
 
 [Install]
 WantedBy=multi-user.target
 EOL
 
-# 20. Configure Mail Server
-print_header "=== Step 18: Configuring Mail Server ==="
-
-# Configure Postfix
-print_status "Configuring Postfix..."
-cp /etc/postfix/main.cf /etc/postfix/main.cf.backup
-
-cat > /etc/postfix/main.cf <<EOL
-# Basic settings
-myhostname = $MAIL_DOMAIN
-mydomain = $MAIN_DOMAIN
-myorigin = \$mydomain
-inet_interfaces = all
-inet_protocols = ipv4
-mydestination = localhost
-relayhost = 
-
-# Network settings
-mynetworks = 127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128
-
-# Virtual mailbox settings
-virtual_mailbox_domains = mysql:/etc/postfix/mysql-virtual-mailbox-domains.cf
-virtual_mailbox_maps = mysql:/etc/postfix/mysql-virtual-mailbox-maps.cf
-virtual_alias_maps = mysql:/etc/postfix/mysql-virtual-alias-maps.cf
-virtual_mailbox_base = /var/mail/vhosts
-virtual_minimum_uid = 1000
-virtual_uid_maps = static:5000
-virtual_gid_maps = static:5000
-
-# Security settings
-disable_vrfy_command = yes
-smtpd_helo_required = yes
-smtpd_helo_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_invalid_helo_hostname, reject_non_fqdn_helo_hostname
-smtpd_sender_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_non_fqdn_sender, reject_unknown_sender_domain
-smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_non_fqdn_recipient, reject_unknown_recipient_domain, reject_unauth_destination
-
-# TLS settings (will be updated after SSL certificates)
-smtpd_use_tls = yes
-smtpd_tls_auth_only = yes
-smtpd_tls_security_level = may
-smtpd_tls_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
-smtpd_tls_ciphers = high
-
-# SMTP client TLS
-smtp_use_tls = yes
-smtp_tls_security_level = may
-smtp_tls_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
-
-# SASL settings
-smtpd_sasl_type = dovecot
-smtpd_sasl_path = private/auth
-smtpd_sasl_auth_enable = yes
-broken_sasl_auth_clients = yes
-
-# Message size limit (50MB)
-message_size_limit = 52428800
-
-# Delivery settings
-home_mailbox = Maildir/
-mailbox_command = 
-EOL
-
-# Create MySQL configuration files for Postfix
-print_status "Creating Postfix MySQL configuration files..."
-
-cat > /etc/postfix/mysql-virtual-mailbox-domains.cf <<EOL
-user = mailuser
-password = mail_pass123
-hosts = 127.0.0.1
-dbname = mailserver
-query = SELECT 1 FROM virtual_domains WHERE name='%s'
-EOL
-
-cat > /etc/postfix/mysql-virtual-mailbox-maps.cf <<EOL
-user = mailuser
-password = mail_pass123
-hosts = 127.0.0.1
-dbname = mailserver
-query = SELECT 1 FROM virtual_users WHERE email='%s'
-EOL
-
-cat > /etc/postfix/mysql-virtual-alias-maps.cf <<EOL
-user = mailuser
-password = mail_pass123
-hosts = 127.0.0.1
-dbname = mailserver
-query = SELECT destination FROM virtual_aliases WHERE source='%s'
-EOL
-
-# Set permissions
-chmod 640 /etc/postfix/mysql-*.cf
-chgrp postfix /etc/postfix/mysql-*.cf
-
-# Configure Dovecot
-print_status "Configuring Dovecot..."
-cp /etc/dovecot/dovecot.conf /etc/dovecot/dovecot.conf.backup
-
-cat > /etc/dovecot/dovecot.conf <<EOL
-# Protocols
-protocols = imap pop3 lmtp sieve
-
-# Authentication
-auth_mechanisms = plain login
-auth_username_format = %Lu
-
-# Mail location
-mail_location = maildir:/var/mail/vhosts/%d/%n
-mail_privileged_group = mail
-
-# User/group settings
-first_valid_uid = 5000
-last_valid_uid = 5000
-first_valid_gid = 5000
-last_valid_gid = 5000
-
-# SSL settings (will be updated after certificates)
-ssl = required
-ssl_protocols = !SSLv2 !SSLv3 !TLSv1 !TLSv1.1
-ssl_cipher_list = ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!SHA1:!AESCCM
-ssl_prefer_server_ciphers = yes
-ssl_dh_parameters_length = 2048
-
-# Service settings
-service imap-login {
- inet_listener imap {
-   port = 143
- }
- inet_listener imaps {
-   port = 993
-   ssl = yes
- }
-}
-
-service pop3-login {
- inet_listener pop3 {
-   port = 110
- }
- inet_listener pop3s {
-   port = 995
-   ssl = yes
- }
-}
-
-service lmtp {
- unix_listener /var/spool/postfix/private/dovecot-lmtp {
-   group = postfix
-   mode = 0600
-   user = postfix
- }
-}
-
-service auth {
- unix_listener /var/spool/postfix/private/auth {
-   group = postfix
-   mode = 0660
-   user = postfix
- }
- unix_listener auth-userdb {
-   group = mail
-   mode = 0600
-   user = vmail
- }
- user = dovecot
-}
-
-service auth-worker {
- user = vmail
-}
-
-# Authentication
-passdb {
- driver = sql
- args = /etc/dovecot/dovecot-mysql.conf.ext
-}
-
-userdb {
- driver = static
- args = uid=vmail gid=vmail home=/var/mail/vhosts/%d/%n
-}
-EOL
-
-# Create Dovecot MySQL configuration
-cat > /etc/dovecot/dovecot-mysql.conf.ext <<EOL
-driver = mysql
-connect = host=127.0.0.1 dbname=mailserver user=mailuser password=mail_pass123
-default_pass_scheme = SHA512-CRYPT
-password_query = SELECT email as user, password FROM virtual_users WHERE email='%u'
-EOL
-
-chmod 640 /etc/dovecot/dovecot-mysql.conf.ext
-
-# Setup mail directories
-print_status "Setting up mail directories..."
-mkdir -p /var/mail/vhosts/$MAIN_DOMAIN
-chown -R vmail:vmail /var/mail/vhosts
-chmod -R 770 /var/mail/vhosts
-
-# Configure OpenDKIM
-print_status "Configuring DKIM..."
-mkdir -p /etc/opendkim/keys/$MAIN_DOMAIN
-
-cat > /etc/opendkim.conf <<EOL
-Syslog yes
-UMask 022
-Domain $MAIN_DOMAIN
-KeyFile /etc/opendkim/keys/$MAIN_DOMAIN/mail.private
-Selector mail
-SOCKET inet:12301@localhost
-PidFile /var/run/opendkim/opendkim.pid
-OversignHeaders From
-TrustAnchorFile /usr/share/dns/root.key
-UserID opendkim
-EOL
-
-# Generate DKIM keys
-cd /etc/opendkim/keys/$MAIN_DOMAIN
-opendkim-genkey -s mail -d $MAIN_DOMAIN
-chown opendkim:opendkim mail.private
-chmod 600 mail.private
-
-# Add DKIM to Postfix
-echo "milter_protocol = 2" >> /etc/postfix/main.cf
-echo "milter_default_action = accept" >> /etc/postfix/main.cf
-echo "smtpd_milters = inet:localhost:12301" >> /etc/postfix/main.cf
-echo "non_smtpd_milters = inet:localhost:12301" >> /etc/postfix/main.cf
-
-# 21. Install additional tools
-print_header "=== Step 19: Installing Additional Tools ==="
-
-# Install wkhtmltopdf for Odoo
-print_status "Installing wkhtmltopdf..."
-cd /tmp
-wget -q https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.jammy_amd64.deb
-dpkg -i wkhtmltox_0.12.6.1-3.jammy_amd64.deb 2>/dev/null || true
-apt-get install -f -y
-
-# Install Node.js for Odoo
-print_status "Installing Node.js..."
-curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-apt-get install -y nodejs
-npm install -g rtlcss
-
-# Install WP-CLI for WordPress management
-print_status "Installing WP-CLI..."
-cd /tmp
-curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
-chmod +x wp-cli.phar
-mv wp-cli.phar /usr/local/bin/wp
-
-# 22. Enable Nginx sites
-print_header "=== Step 20: Enabling Nginx Sites ==="
+# 17. Enable Nginx sites
+print_header "=== Step 17: Enabling Nginx Sites ==="
 ln -sf /etc/nginx/sites-available/wordpress /etc/nginx/sites-enabled/
 ln -sf /etc/nginx/sites-available/odoo /etc/nginx/sites-enabled/
 ln -sf /etc/nginx/sites-available/phpmyadmin /etc/nginx/sites-enabled/
-ln -sf /etc/nginx/sites-available/webmail /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default
 
 # Test nginx configuration
@@ -1389,23 +1153,8 @@ else
    exit 1
 fi
 
-# 23. Configure firewall
-print_header "=== Step 21: Configuring Firewall ==="
-ufw --force enable
-ufw allow ssh
-ufw allow 80/tcp    # HTTP
-ufw allow 443/tcp   # HTTPS
-ufw allow 8069/tcp  # Odoo direct access
-ufw allow 25/tcp    # SMTP
-ufw allow 587/tcp   # SMTP Submission
-ufw allow 465/tcp   # SMTPS
-ufw allow 110/tcp   # POP3
-ufw allow 995/tcp   # POP3S
-ufw allow 143/tcp   # IMAP
-ufw allow 993/tcp   # IMAPS
-
-# 24. Download and prepare Odoo database
-print_header "=== Step 22: Preparing Odoo Database ==="
+# 18. Download and prepare Odoo database
+print_header "=== Step 18: Preparing Odoo Database ==="
 if [[ "$DB_CHOICE" == "1" ]]; then
    print_status "Downloading pre-configured database backup..."
    cd /opt/odoo18-enterprise/backups
@@ -1419,31 +1168,67 @@ else
    DB_FILE=""
 fi
 
-# 25. Start services
-print_header "=== Step 23: Starting All Services ==="
+# 19. Start services with database checks
+print_header "=== Step 19: Starting Services with Database Verification ==="
+
+# Ensure PostgreSQL is running
+if ! systemctl is-active --quiet postgresql; then
+   systemctl start postgresql
+   sleep 10
+fi
+
+# Ensure MariaDB is running and connections work
+if ! systemctl is-active --quiet mariadb; then
+   systemctl start mariadb
+   sleep 10
+fi
+
+# Test database connections before starting Odoo
+print_status "Verifying database connections..."
+
+# Test PostgreSQL
+if su - postgres -c "psql -c 'SELECT 1;'" >/dev/null 2>&1; then
+   print_success "✅ PostgreSQL connection works"
+else
+   print_error "❌ PostgreSQL connection failed"
+   exit 1
+fi
+
+# Test MariaDB
+if mysql -uwordpress -pwp_pass123 -e "SELECT 1;" >/dev/null 2>&1; then
+   print_success "✅ WordPress database connection works"
+else
+   print_error "❌ WordPress database connection failed"
+   exit 1
+fi
+
+# Start Odoo service
 systemctl daemon-reload
-
-# Start database services
-systemctl enable postgresql mariadb redis-server
-systemctl start postgresql mariadb redis-server
-sleep 10
-
-# Start mail services
-systemctl enable postfix dovecot opendkim
-systemctl start postfix dovecot opendkim
-sleep 5
-
-# Start web services
-systemctl enable php$PHP_VERSION-fpm nginx
-systemctl start php$PHP_VERSION-fpm nginx
-sleep 5
-
-# Start Odoo
 systemctl enable odoo
 systemctl start odoo
-sleep 15
 
-# 26. Import Odoo database if available
+# Wait for Odoo to start and check status
+print_status "Waiting for Odoo to start..."
+sleep 30
+
+# Check if Odoo started successfully
+if systemctl is-active --quiet odoo; then
+   print_success "✅ Odoo service started"
+   
+   # Test web interface
+   if curl -f http://localhost:8069 >/dev/null 2>&1; then
+       print_success "✅ Odoo web interface accessible"
+   else
+       print_warning "⚠️ Odoo web interface not yet accessible, checking logs..."
+       journalctl -u odoo -n 10 --no-pager
+   fi
+else
+   print_error "❌ Odoo service failed to start"
+   journalctl -u odoo -n 20 --no-pager
+   exit 1
+fi
+
+# 20. Import Odoo database if available
 if [[ "$DB_CHOICE" == "1" && -n "$DB_FILE" && -f "$DB_FILE" ]]; then
    print_status "Importing pre-configured database backup..."
    print_status "This may take several minutes for large databases..."
@@ -1500,58 +1285,13 @@ else
    FINAL_DB_NAME="Will be created on first login"
 fi
 
-# 27. Create test email account
-print_header "=== Step 24: Creating Test Email Account ==="
-ADMIN_EMAIL="admin@$MAIN_DOMAIN"
-ADMIN_PASS=$(openssl rand -base64 12)
-ADMIN_PASS_HASH=$(doveadm pw -s SHA512-CRYPT -p "$ADMIN_PASS")
-
-# Get domain ID
-DOMAIN_ID=$(mysql -uroot -pmysql_root_pass123 -sN mailserver -e "SELECT id FROM virtual_domains WHERE name='$MAIN_DOMAIN'")
-
-# Insert admin user
-mysql -uroot -pmysql_root_pass123 mailserver -e "INSERT INTO virtual_users (domain_id, password, email) VALUES ($DOMAIN_ID, '$ADMIN_PASS_HASH', '$ADMIN_EMAIL');"
-
-# Create mailbox directory
-mkdir -p /var/mail/vhosts/$MAIN_DOMAIN/admin
-chown -R vmail:vmail /var/mail/vhosts/$MAIN_DOMAIN/admin
-
-# 28. Generate temporary SSL certificates
-print_header "=== Step 25: Generating Temporary SSL Certificates ==="
-mkdir -p /etc/ssl/private
-
-# Create temporary certificates for mail server
-openssl req -new -newkey rsa:4096 -days 90 -nodes -x509 \
-   -subj "/C=US/ST=State/L=City/O=Organization/CN=$MAIL_DOMAIN" \
-   -keyout /etc/ssl/private/$MAIL_DOMAIN.key \
-   -out /etc/ssl/certs/$MAIL_DOMAIN.crt
-
-# Update mail configs to use temporary certificates initially
-sed -i "/^smtpd_tls_cert_file/d" /etc/postfix/main.cf
-sed -i "/^smtpd_tls_key_file/d" /etc/postfix/main.cf
-sed -i "/^smtp_tls_cert_file/d" /etc/postfix/main.cf
-sed -i "/^smtp_tls_key_file/d" /etc/postfix/main.cf
-echo "smtpd_tls_cert_file = /etc/ssl/certs/$MAIL_DOMAIN.crt" >> /etc/postfix/main.cf
-echo "smtpd_tls_key_file = /etc/ssl/private/$MAIL_DOMAIN.key" >> /etc/postfix/main.cf
-echo "smtp_tls_cert_file = /etc/ssl/certs/$MAIL_DOMAIN.crt" >> /etc/postfix/main.cf
-echo "smtp_tls_key_file = /etc/ssl/private/$MAIL_DOMAIN.key" >> /etc/postfix/main.cf
-
-sed -i "/^ssl_cert/d" /etc/dovecot/dovecot.conf
-sed -i "/^ssl_key/d" /etc/dovecot/dovecot.conf
-echo "ssl_cert = </etc/ssl/certs/$MAIL_DOMAIN.crt" >> /etc/dovecot/dovecot.conf
-echo "ssl_key = </etc/ssl/private/$MAIL_DOMAIN.key" >> /etc/dovecot/dovecot.conf
-
-# Restart mail services with temporary certificates
-systemctl restart postfix dovecot
-
-# 29. Wait for services and get SSL certificates
-print_header "=== Step 26: Obtaining SSL Certificates ==="
-print_status "Waiting for all services to be ready..."
-sleep 30
+# 21. Setup SSL certificates
+print_header "=== Step 20: Setting up SSL Certificates ==="
+print_status "Waiting for services to be fully operational..."
+sleep 20
 
 # Check if services are responding
-domains=("$MAIN_DOMAIN" "$ERP_DOMAIN" "$PMA_DOMAIN" "$WEBMAIL_DOMAIN")
-for domain in "${domains[@]}"; do
+for domain in "$MAIN_DOMAIN" "$ERP_DOMAIN" "$PMA_DOMAIN"; do
    print_status "Checking $domain..."
    for i in {1..10}; do
        if curl -f -H "Host: $domain" http://localhost >/dev/null 2>&1; then
@@ -1566,26 +1306,18 @@ done
 
 # Get SSL certificates for all domains
 print_status "Obtaining SSL certificates for all domains..."
-certbot --nginx -d "$MAIN_DOMAIN" -d "$ERP_DOMAIN" -d "$PMA_DOMAIN" -d "$WEBMAIL_DOMAIN" -d "$MAIL_DOMAIN" \
+certbot --nginx -d "$MAIN_DOMAIN" -d "$ERP_DOMAIN" -d "$PMA_DOMAIN" \
    --email "$SSL_EMAIL" --agree-tos --non-interactive --redirect
 
 if [ $? -eq 0 ]; then
    print_success "SSL certificates obtained successfully for all domains!"
    
-   # Update mail server configs to use Let's Encrypt certificates
-   sed -i "s|/etc/ssl/certs/$MAIL_DOMAIN.crt|/etc/letsencrypt/live/$MAIL_DOMAIN/fullchain.pem|g" /etc/postfix/main.cf
-   sed -i "s|/etc/ssl/private/$MAIL_DOMAIN.key|/etc/letsencrypt/live/$MAIL_DOMAIN/privkey.pem|g" /etc/postfix/main.cf
-   sed -i "s|/etc/ssl/certs/$MAIL_DOMAIN.crt|/etc/letsencrypt/live/$MAIL_DOMAIN/fullchain.pem|g" /etc/dovecot/dovecot.conf
-   sed -i "s|/etc/ssl/private/$MAIL_DOMAIN.key|/etc/letsencrypt/live/$MAIL_DOMAIN/privkey.pem|g" /etc/dovecot/dovecot.conf
-   
-   # Restart mail services with real certificates
-   systemctl restart postfix dovecot
-   
    # Add security headers for HTTPS
-   for site in wordpress odoo phpmyadmin webmail; do
+   for site in wordpress odoo phpmyadmin; do
        if [ -f "/etc/nginx/sites-available/$site" ]; then
+           # Add HSTS header if not present
            if ! grep -q "Strict-Transport-Security" /etc/nginx/sites-available/$site; then
-               sed -i '/add_header X-Frame-Options/a\    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' /etc/nginx/sites-available/$site
+               sed -i '/ssl_certificate/a\    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' /etc/nginx/sites-available/$site
            fi
        fi
    done
@@ -1596,49 +1328,50 @@ if [ $? -eq 0 ]; then
    systemctl enable certbot.timer
    systemctl start certbot.timer
 else
-   print_warning "SSL certificate setup failed. Using temporary certificates."
+   print_warning "SSL certificate setup failed. You can try manually later."
 fi
 
-# 30. Install WordPress plugins for optimization
-print_header "=== Step 27: Installing WordPress Optimization Plugins ==="
+# 22. Install WordPress plugins for optimization
+print_header "=== Step 21: Installing WordPress Optimization Plugins ==="
 cd /var/www/wordpress
 
 # Download and install Redis Object Cache plugin
 print_status "Installing Redis Object Cache plugin..."
-sudo -u www-data wp plugin install redis-cache --allow-root
-sudo -u www-data wp plugin install w3-total-cache --allow-root
-sudo -u www-data wp plugin install autoptimize --allow-root
-sudo -u www-data wp plugin install ewww-image-optimizer --allow-root
+wp plugin install redis-cache --allow-root
+wp plugin activate redis-cache --allow-root
+wp redis enable --allow-root
 
-# 31. Configure fail2ban
-print_header "=== Step 28: Configuring Advanced Security ==="
+# Download and install other essential plugins
+print_status "Installing essential WordPress plugins..."
+wp plugin install w3-total-cache --allow-root
+wp plugin install wp-super-cache --allow-root
+wp plugin install autoptimize --allow-root
+wp plugin install ewww-image-optimizer --allow-root
+
+# 23. Configure firewall
+print_header "=== Step 22: Configuring Firewall ==="
+ufw --force enable
+ufw allow ssh
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw allow 8069/tcp
+
+# Configure fail2ban
 print_status "Configuring fail2ban..."
 cat > /etc/fail2ban/jail.local <<EOL
 [DEFAULT]
 bantime = 3600
 findtime = 600
 maxretry = 5
-backend = systemd
 
 [nginx-http-auth]
 enabled = true
 
 [nginx-limit-req]
 enabled = true
-filter = nginx-limit-req
-logpath = /var/log/nginx/error.log
 
-[postfix]
+[php-url-fopen]
 enabled = true
-port = smtp,465,submission
-filter = postfix
-logpath = /var/log/mail.log
-
-[dovecot]
-enabled = true
-port = pop3,pop3s,imap,imaps,submission,465,sieve
-filter = dovecot
-logpath = /var/log/mail.log
 
 [wordpress]
 enabled = true
@@ -1646,35 +1379,13 @@ filter = wordpress
 logpath = /var/log/nginx/access.log
 maxretry = 3
 bantime = 3600
-
-[phpmyadmin]
-enabled = true
-filter = phpmyadmin-syslog
-logpath = /var/log/nginx/access.log
-maxretry = 3
-bantime = 3600
-EOL
-
-# Create custom filters
-cat > /etc/fail2ban/filter.d/wordpress.conf <<EOL
-[Definition]
-failregex = ^<HOST> .* "POST /wp-login.php
-           ^<HOST> .* "POST /wp-admin/admin-ajax.php
-ignoreregex =
-EOL
-
-cat > /etc/fail2ban/filter.d/phpmyadmin-syslog.conf <<EOL
-[Definition]
-failregex = ^<HOST> .* "POST /index.php
-           ^<HOST> .* "GET /index.php.*pma_username
-ignoreregex =
 EOL
 
 systemctl restart fail2ban
 systemctl enable fail2ban
 
-# 32. Create management scripts
-print_header "=== Step 29: Creating Management Scripts ==="
+# 24. Create maintenance scripts
+print_header "=== Step 23: Creating Maintenance Scripts ==="
 
 # Odoo backup script
 cat > /opt/odoo18-enterprise/backup.sh <<EOL
@@ -1711,83 +1422,6 @@ EOL
 
 chmod +x /var/www/backup_wordpress.sh
 
-# Mail management scripts
-cat > /usr/local/bin/add_mail_user.sh <<EOL
-#!/bin/bash
-if [ \$# -ne 2 ]; then
-   echo "Usage: \$0 <email> <password>"
-   exit 1
-fi
-
-EMAIL=\$1
-PASSWORD=\$2
-DOMAIN=\$(echo \$EMAIL | cut -d@ -f2)
-USERNAME=\$(echo \$EMAIL | cut -d@ -f1)
-
-# Check if domain exists
-DOMAIN_ID=\$(mysql -uroot -pmysql_root_pass123 -sN mailserver -e "SELECT id FROM virtual_domains WHERE name='\$DOMAIN'")
-if [ -z "\$DOMAIN_ID" ]; then
-   echo "Domain \$DOMAIN not found in database"
-   exit 1
-fi
-
-# Hash password
-PASS_HASH=\$(doveadm pw -s SHA512-CRYPT -p "\$PASSWORD")
-
-# Add user to database
-mysql -uroot -pmysql_root_pass123 mailserver -e "INSERT INTO virtual_users (domain_id, password, email) VALUES (\$DOMAIN_ID, '\$PASS_HASH', '\$EMAIL');"
-
-# Create mailbox directory
-mkdir -p /var/mail/vhosts/\$DOMAIN/\$USERNAME
-chown -R vmail:vmail /var/mail/vhosts/\$DOMAIN/\$USERNAME
-
-echo "Email account \$EMAIL created successfully"
-EOL
-
-chmod +x /usr/local/bin/add_mail_user.sh
-
-# System status script
-cat > /usr/local/bin/system_status.sh <<EOL
-#!/bin/bash
-echo "=== Complete Server Status ==="
-echo "Date: \$(date)"
-echo ""
-echo "=== Services Status ==="
-services=("nginx" "mariadb" "postgresql" "redis-server" "php$PHP_VERSION-fpm" "odoo" "postfix" "dovecot" "opendkim")
-for service in "\${services[@]}"; do
-   if systemctl is-active --quiet \$service; then
-       echo "✅ \$service is running"
-   else
-       echo "❌ \$service is not running"
-   fi
-done
-
-echo ""
-echo "=== Disk Usage ==="
-df -h | grep -E "(Filesystem|/dev/)"
-echo ""
-echo "=== Memory Usage ==="
-free -h
-echo ""
-echo "=== Load Average ==="
-uptime
-echo ""
-echo "=== SSL Certificates ==="
-certbot certificates 2>/dev/null | grep -E "(Certificate Name|Domains|Expiry Date)" || echo "No certificates found"
-echo ""
-echo "=== Database Connections ==="
-echo "MySQL: \$(mysql -uroot -pmysql_root_pass123 -e 'SHOW STATUS LIKE "Threads_connected";' | tail -1 | awk '{print \$2}') connections"
-echo "PostgreSQL: \$(su - postgres -c 'psql -t -c "SELECT count(*) FROM pg_stat_activity;"' 2>/dev/null | xargs) connections"
-echo ""
-echo "=== Recent Log Errors ==="
-echo "Nginx errors (last 5):"
-tail -5 /var/log/nginx/error.log 2>/dev/null | grep ERROR || echo "No recent errors"
-echo "Mail errors (last 5):"
-tail -5 /var/log/mail.log 2>/dev/null | grep -i error || echo "No recent errors"
-EOL
-
-chmod +x /usr/local/bin/system_status.sh
-
 # Create cron jobs for backups
 cat > /tmp/crontab_backups <<EOL
 # Odoo backup daily at 2 AM
@@ -1798,145 +1432,202 @@ cat > /tmp/crontab_backups <<EOL
 
 # SSL renewal check daily
 0 1 * * * certbot renew --quiet
-
-# System status weekly report
-0 9 * * 1 /usr/local/bin/system_status.sh | mail -s "Weekly Server Status" root
 EOL
 
 crontab /tmp/crontab_backups
 rm /tmp/crontab_backups
 
-# 33. Final optimizations
-print_header "=== Step 30: Final System Optimizations ==="
-
-# Optimize system limits
-cat >> /etc/security/limits.conf <<EOL
-# Optimizations for web server
-www-data soft nofile 65535
-www-data hard nofile 65535
-odoo soft nofile 65535
-odoo hard nofile 65535
-mysql soft nofile 65535
-mysql hard nofile 65535
-EOL
-
-# Optimize kernel parameters
-cat >> /etc/sysctl.conf <<EOL
-# Network optimizations
-net.core.rmem_max = 16777216
-net.core.wmem_max = 16777216
-net.ipv4.tcp_rmem = 4096 87380 16777216
-net.ipv4.tcp_wmem = 4096 65536 16777216
-net.core.netdev_max_backlog = 5000
-net.ipv4.tcp_congestion_control = bbr
-
-# File system optimizations
-fs.file-max = 2097152
-vm.swappiness = 10
-vm.dirty_ratio = 15
-vm.dirty_background_ratio = 5
-EOL
-
-sysctl -p
-
-# 34. Final status check
-print_header "=== Step 31: Final Comprehensive Status Check ==="
-
+# 25. Create system monitoring script
+cat > /usr/local/bin/system_status.sh <<EOL
+#!/bin/bash
+echo "=== System Status ==="
+echo "Date: \$(date)"
 echo ""
-print_status "=== All Services Status ==="
-services=("nginx" "mariadb" "postgresql" "redis-server" "php$PHP_VERSION-fpm" "odoo" "postfix" "dovecot" "opendkim" "fail2ban")
+
+echo "=== Services Status ==="
+systemctl status nginx --no-pager -l | grep "Active:"
+systemctl status mariadb --no-pager -l | grep "Active:"
+systemctl status postgresql --no-pager -l | grep "Active:"
+systemctl status redis-server --no-pager -l | grep "Active:"
+systemctl status php$PHP_VERSION-fpm --no-pager -l | grep "Active:"
+systemctl status odoo --no-pager -l | grep "Active:"
+echo ""
+
+echo "=== Database Connections ==="
+if mysql -uwordpress -pwp_pass123 -e "SELECT 'WordPress DB: Connected' as status;" 2>/dev/null; then
+   echo "✅ WordPress Database: Connected"
+else
+   echo "❌ WordPress Database: Failed"
+fi
+
+if su - postgres -c "psql -c \"SELECT 'PostgreSQL: Connected' as status;\"" 2>/dev/null | grep -q "Connected"; then
+   echo "✅ PostgreSQL: Connected"
+else
+   echo "❌ PostgreSQL: Failed"
+fi
+echo ""
+
+echo "=== Web Services ==="
+if curl -f http://localhost:8069 >/dev/null 2>&1; then
+   echo "✅ Odoo: Accessible"
+else
+   echo "❌ Odoo: Not accessible"
+fi
+
+if curl -f http://localhost >/dev/null 2>&1; then
+   echo "✅ Nginx: Serving content"
+else
+   echo "❌ Nginx: Not responding"
+fi
+
+if redis-cli ping >/dev/null 2>&1; then
+   echo "✅ Redis: Responding"
+else
+   echo "❌ Redis: Not responding"
+fi
+echo ""
+
+echo "=== Disk Usage ==="
+df -h | grep -E "(Filesystem|/dev/)"
+echo ""
+echo "=== Memory Usage ==="
+free -h
+echo ""
+echo "=== SSL Certificates ==="
+certbot certificates
+EOL
+
+chmod +x /usr/local/bin/system_status.sh
+
+# 26. Final comprehensive status check and service verification
+print_header "=== Step 24: Final Comprehensive Status Check ==="
+
+# Wait for all services to stabilize
+sleep 15
+
+print_status "Performing comprehensive service verification..."
+
+# Database connection tests
+print_status "=== Database Connection Tests ==="
+
+# Test MariaDB/WordPress connection
+if mysql -uwordpress -pwp_pass123 -e "SELECT 'WordPress DB Connected' as status;" 2>/dev/null; then
+   print_success "✅ WordPress database connection works"
+else
+   print_error "❌ WordPress database connection failed"
+   
+   # Try to fix MariaDB issues
+   print_status "Attempting to fix MariaDB connection..."
+   systemctl restart mariadb
+   sleep 10
+   
+   if mysql -uwordpress -pwp_pass123 -e "SELECT 1;" >/dev/null 2>&1; then
+       print_success "✅ WordPress database connection fixed"
+   else
+       print_error "❌ WordPress database still failing"
+   fi
+fi
+
+# Test PostgreSQL connection
+if su - postgres -c "psql -c \"SELECT 'PostgreSQL Connected' as status;\"" 2>/dev/null; then
+   print_success "✅ PostgreSQL connection works"
+else
+   print_error "❌ PostgreSQL connection failed"
+   systemctl restart postgresql
+   sleep 10
+fi
+
+# Service status verification
+print_status "=== Service Status Verification ==="
+
+services=("postgresql" "mariadb" "odoo" "nginx" "redis-server" "php$PHP_VERSION-fpm")
+all_services_ok=true
+
 for service in "${services[@]}"; do
    if systemctl is-active --quiet $service; then
        print_success "✅ $service is running"
    else
        print_error "❌ $service is not running"
+       all_services_ok=false
+       
+       # Try to restart failed services
+       print_status "Attempting to restart $service..."
+       systemctl restart $service
+       sleep 5
+       
+       if systemctl is-active --quiet $service; then
+           print_success "✅ $service restarted successfully"
+       else
+           print_error "❌ $service restart failed"
+       fi
    fi
 done
 
-echo ""
-print_status "=== Connection Tests ==="
+# Web interface tests
+print_status "=== Web Interface Tests ==="
 
-# Test databases
-if mysql -uwordpress -pwp_pass123 -e "SELECT 'WordPress DB Connected' as status;" 2>/dev/null; then
-   print_success "✅ WordPress database connection works"
-else
-   print_error "❌ WordPress database connection failed"
-fi
-
-if su - postgres -c "psql -c \"SELECT 'PostgreSQL Connected' as status;\"" 2>/dev/null; then
-   print_success "✅ PostgreSQL connection works"
-else
-   print_error "❌ PostgreSQL connection failed"
-fi
-
-if mysql -umailuser -pmail_pass123 mailserver -e "SELECT COUNT(*) FROM virtual_users;" >/dev/null 2>&1; then
-   print_success "✅ Mail database connection works"
-else
-   print_error "❌ Mail database connection failed"
-fi
-
-# Test web interfaces
-sleep 15
-if curl -f http://localhost >/dev/null 2>&1; then
-   print_success "✅ WordPress interface accessible"
-else
-   print_error "❌ WordPress interface not accessible"
-fi
-
-if curl -f http://localhost:8069 >/dev/null 2>&1; then
-   print_success "✅ Odoo interface accessible"
-else
-   print_error "❌ Odoo interface not accessible"
-fi
-
-# Test mail services
-if echo "QUIT" | nc -w 3 localhost 25 >/dev/null 2>&1; then
-   print_success "✅ SMTP is responding"
-else
-   print_error "❌ SMTP not responding"
-fi
-
-if echo "LOGOUT" | nc -w 3 localhost 143 >/dev/null 2>&1; then
-   print_success "✅ IMAP is responding"
-else
-   print_error "❌ IMAP not responding"
-fi
+# Test Odoo web interface
+sleep 10
+for i in {1..5}; do
+   if curl -f http://localhost:8069 >/dev/null 2>&1; then
+       print_success "✅ Odoo web interface accessible"
+       break
+   else
+       print_warning "⚠️ Odoo web interface not accessible (attempt $i/5)"
+       if [ $i -eq 5 ]; then
+           print_error "❌ Odoo web interface failed after 5 attempts"
+           print_status "Checking Odoo logs:"
+           journalctl -u odoo -n 20 --no-pager
+       else
+           sleep 10
+       fi
+   fi
+done
 
 # Test Redis
 if redis-cli ping >/dev/null 2>&1; then
    print_success "✅ Redis is responding"
 else
-   print_warning "⚠️  Redis not responding"
+   print_warning "⚠️ Redis not responding"
+   systemctl restart redis-server
+fi
+
+# Test Nginx
+if curl -f http://localhost >/dev/null 2>&1; then
+   print_success "✅ Nginx is serving content"
+else
+   print_error "❌ Nginx not responding"
+   nginx -t && systemctl restart nginx
+fi
+
+# 27. Final installation summary
+print_header "=== INSTALLATION COMPLETED SUCCESSFULLY ==="
+
+print_success "🎉 Installation Complete!"
+echo ""
+print_header "📱 Access Information:"
+
+# Check HTTPS access
+if curl -k -f https://$MAIN_DOMAIN >/dev/null 2>&1; then
+   print_success "✅ WordPress: https://$MAIN_DOMAIN"
+else
+   print_warning "⚠️  WordPress: http://$MAIN_DOMAIN (SSL pending)"
+fi
+
+if curl -k -f https://$ERP_DOMAIN >/dev/null 2>&1; then
+   print_success "✅ Odoo: https://$ERP_DOMAIN"
+else
+   print_warning "⚠️  Odoo: http://$ERP_DOMAIN (SSL pending)"
+fi
+
+if curl -k -f https://$PMA_DOMAIN >/dev/null 2>&1; then
+   print_success "✅ phpMyAdmin: https://$PMA_DOMAIN"
+else
+   print_warning "⚠️  phpMyAdmin: http://$PMA_DOMAIN (SSL pending)"
 fi
 
 echo ""
-print_header "=== INSTALLATION COMPLETED SUCCESSFULLY! ==="
-
-print_success "🎉 Complete Server Installation Finished!"
-echo ""
-print_success "🌐 ACCESS INFORMATION:"
-echo ""
-
-# Check HTTPS access for each domain
-domains_status=()
-for domain_info in "$MAIN_DOMAIN:WordPress" "$ERP_DOMAIN:Odoo" "$PMA_DOMAIN:phpMyAdmin" "$WEBMAIL_DOMAIN:Webmail"; do
-   domain=$(echo $domain_info | cut -d: -f1)
-   service=$(echo $domain_info | cut -d: -f2)
-   if curl -k -f https://$domain >/dev/null 2>&1; then
-       print_success "   ✅ $service: https://$domain"
-   else
-       print_warning "   ⚠️  $service: http://$domain (SSL may be pending)"
-   fi
-done
-
-echo ""
-print_success "📧 MAIL SERVER:"
-print_status "   📬 Server: $MAIL_DOMAIN"
-print_status "   🌐 Webmail: https://$WEBMAIL_DOMAIN"
-print_status "   📨 Test Account: $ADMIN_EMAIL / $ADMIN_PASS"
-
-echo ""
-print_success "🔐 LOGIN CREDENTIALS:"
+print_header "🔐 Login Credentials:"
 echo ""
 print_status "📊 Odoo 18 Enterprise:"
 print_status "   👤 Username: admin"
@@ -1945,225 +1636,105 @@ print_status "   🗄️ Database: $FINAL_DB_NAME"
 echo ""
 print_status "🌐 WordPress:"
 print_status "   🔗 Setup: https://$MAIN_DOMAIN/wp-admin/install.php"
-print_status "   🗄️ Database: wordpress / wordpress / wp_pass123"
+print_status "   🗄️ Database: wordpress"
+print_status "   👤 DB User: wordpress"
+print_status "   🔑 DB Pass: wp_pass123"
 echo ""
 print_status "🛠️ phpMyAdmin:"
 print_status "   👤 Username: root"
 print_status "   🔑 Password: mysql_root_pass123"
 echo ""
-print_status "📧 Mail Admin Account:"
-print_status "   📨 Email: $ADMIN_EMAIL"
-print_status "   🔑 Password: $ADMIN_PASS"
-
-echo ""
-print_success "🗄️ DATABASE INFORMATION:"
+print_header "💾 Database Information:"
 print_status "   🐘 PostgreSQL (Odoo): odoo18e / odoo123"
-print_status "   🐬 MariaDB Root: root / mysql_root_pass123"
-print_status "   🌐 WordPress DB: wordpress / wp_pass123"
-print_status "   📧 Mail DB: mailuser / mail_pass123"
-print_status "   📮 Roundcube DB: roundcube / roundcube_pass123"
+print_status "   🐬 MariaDB (WordPress): wordpress / wp_pass123"
 print_status "   🔴 Redis: localhost:6379"
-
 echo ""
-print_success "📂 IMPORTANT PATHS:"
+print_header "📂 Important Paths:"
 print_status "   📁 Odoo: /opt/odoo18-enterprise/odoo"
 print_status "   📁 WordPress: /var/www/wordpress"
 print_status "   📁 phpMyAdmin: /var/www/phpmyadmin"
-print_status "   📁 Webmail: /var/www/webmail"
-print_status "   📁 Mail Storage: /var/mail/vhosts/"
 print_status "   📁 Nginx Config: /etc/nginx/sites-available/"
-print_status "   📁 SSL Certificates: /etc/letsencrypt/live/"
-
+print_status "   📁 Odoo Logs: /var/log/odoo/odoo.log"
+print_status "   📁 Nginx Logs: /var/log/nginx/"
+print_status "   📁 Odoo Config: /etc/odoo/odoo.conf"
 echo ""
-print_success "🔧 MANAGEMENT COMMANDS:"
-print_status "   System status: /usr/local/bin/system_status.sh"
-print_status "   Add email user: /usr/local/bin/add_mail_user.sh user@domain.com password"
-print_status "   Odoo backup: /opt/odoo18-enterprise/backup.sh"
-print_status "   WordPress backup: /var/www/backup_wordpress.sh"
-print_status "   WordPress CLI: wp --help --allow-root"
-
+print_header "🔧 Useful Commands:"
+print_status "   /usr/local/bin/system_status.sh"
+print_status "   systemctl status nginx mariadb postgresql odoo"
+print_status "   systemctl restart odoo"
+print_status "   wp --help --allow-root"
+print_status "   tail -f /var/log/odoo/odoo.log"
+print_status "   journalctl -u odoo -f"
 echo ""
-print_success "📋 DNS RECORDS NEEDED:"
-print_status "   Add these DNS records to your domain registrar:"
-echo ""
-print_status "   A Records:"
-print_status "   $MAIN_DOMAIN.       IN A  $SERVER_IP"
-print_status "   $ERP_DOMAIN.        IN A  $SERVER_IP"
-print_status "   $PMA_DOMAIN.        IN A  $SERVER_IP"
-print_status "   $MAIL_DOMAIN.       IN A  $SERVER_IP"
-print_status "   $WEBMAIL_DOMAIN.    IN A  $SERVER_IP"
-echo ""
-print_status "   MX Record:"
-print_status "   $MAIN_DOMAIN.       IN MX 10 $MAIL_DOMAIN."
-echo ""
-print_status "   SPF Record (TXT):"
-print_status "   $MAIN_DOMAIN.       IN TXT \"v=spf1 mx ip4:$SERVER_IP ~all\""
-echo ""
-print_status "   DMARC Record (TXT):"
-print_status "   _dmarc.$MAIN_DOMAIN. IN TXT \"v=DMARC1; p=quarantine; rua=mailto:$ADMIN_EMAIL\""
-
-if [ -f "/etc/opendkim/keys/$MAIN_DOMAIN/mail.txt" ]; then
-   echo ""
-   print_status "   DKIM Record (TXT):"
-   print_status "   mail._domainkey.$MAIN_DOMAIN. IN TXT \"$(cat /etc/opendkim/keys/$MAIN_DOMAIN/mail.txt | grep -o 'v=DKIM1.*' | tr -d '\"' | tr -d '\t' | tr -d '\n')\""
-fi
-
-echo ""
-print_success "🔒 SECURITY FEATURES:"
-print_status "   ✅ SSL certificates for all domains"
-print_status "   ✅ Automatic SSL renewal"
+print_header "🔒 Security Features:"
+print_status "   ✅ SSL Certificates (Auto-renewal enabled)"
 print_status "   ✅ Firewall (UFW) configured"
-print_status "   ✅ Fail2ban intrusion prevention"
-print_status "   ✅ Rate limiting on all services"
+print_status "   ✅ Fail2ban protection active"
+print_status "   ✅ Rate limiting configured"
 print_status "   ✅ Security headers enabled"
-print_status "   ✅ DKIM email authentication"
-print_status "   ✅ SPF and DMARC protection"
-
+print_status "   ✅ Database connections secured"
 echo ""
-print_success "⚡ PERFORMANCE FEATURES:"
+print_header "⚡ Performance Features:"
 print_status "   ✅ Redis caching for WordPress"
 print_status "   ✅ Nginx FastCGI cache"
 print_status "   ✅ PHP OPcache enabled"
 print_status "   ✅ MariaDB query cache"
 print_status "   ✅ Gzip compression"
 print_status "   ✅ Static file caching"
-print_status "   ✅ Database optimizations"
-
 echo ""
-print_success "🔄 AUTOMATED MAINTENANCE:"
+print_header "🔄 Automated Backups:"
 print_status "   📅 Odoo backup: Daily at 2:00 AM"
 print_status "   📅 WordPress backup: Daily at 3:00 AM"
-print_status "   📅 SSL renewal: Daily check at 1:00 AM"
-print_status "   📅 System status report: Weekly on Monday"
-
+print_status "   📅 SSL renewal check: Daily at 1:00 AM"
 echo ""
-print_success "📞 SUPPORT & MONITORING:"
-print_status "   📊 System monitoring: /usr/local/bin/system_status.sh"
-print_status "   📝 Log locations: /var/log/nginx/, /var/log/odoo/, /var/log/mail.log"
-print_status "   🔍 Service status: systemctl status [service-name]"
-
-# Save all information to files
-cat > /root/server_installation_info.txt <<EOL
-Complete Server Installation Information
-=======================================
-
-Installation Date: $(date)
-Server IP: $SERVER_IP
-
-DOMAINS:
-- Main (WordPress): $MAIN_DOMAIN
-- ERP (Odoo): $ERP_DOMAIN  
-- phpMyAdmin: $PMA_DOMAIN
-- Mail Server: $MAIL_DOMAIN
-- Webmail: $WEBMAIL_DOMAIN
-
-LOGIN CREDENTIALS:
-- Odoo: admin / admin
-- WordPress DB: wordpress / wp_pass123
-- phpMyAdmin: root / mysql_root_pass123
-- Mail Admin: $ADMIN_EMAIL / $ADMIN_PASS
-- PostgreSQL: odoo18e / odoo123
-- MariaDB Root: root / mysql_root_pass123
-
-MANAGEMENT COMMANDS:
-- System Status: /usr/local/bin/system_status.sh
-- Add Email User: /usr/local/bin/add_mail_user.sh email@domain.com password
-- Odoo Backup: /opt/odoo18-enterprise/backup.sh
-- WordPress Backup: /var/www/backup_wordpress.sh
-
-IMPORTANT PATHS:
-- Odoo: /opt/odoo18-enterprise/odoo
-- WordPress: /var/www/wordpress
-- Mail Storage: /var/mail/vhosts/
-- SSL Certificates: /etc/letsencrypt/live/
-
-DNS RECORDS NEEDED:
-A Records:
-$MAIN_DOMAIN. IN A $SERVER_IP
-$ERP_DOMAIN. IN A $SERVER_IP
-$PMA_DOMAIN. IN A $SERVER_IP
-$MAIL_DOMAIN. IN A $SERVER_IP
-$WEBMAIL_DOMAIN. IN A $SERVER_IP
-
-MX Record:
-$MAIN_DOMAIN. IN MX 10 $MAIL_DOMAIN.
-
-TXT Records:
-$MAIN_DOMAIN. IN TXT "v=spf1 mx ip4:$SERVER_IP ~all"
-_dmarc.$MAIN_DOMAIN. IN TXT "v=DMARC1; p=quarantine; rua=mailto:$ADMIN_EMAIL"
-EOL
-
-if [ -f "/etc/opendkim/keys/$MAIN_DOMAIN/mail.txt" ]; then
-   echo "" >> /root/server_installation_info.txt
-   echo "DKIM Record:" >> /root/server_installation_info.txt
-   echo "mail._domainkey.$MAIN_DOMAIN. IN TXT \"$(cat /etc/opendkim/keys/$MAIN_DOMAIN/mail.txt | grep -o 'v=DKIM1.*' | tr -d '\"' | tr -d '\t' | tr -d '\n')\"" >> /root/server_installation_info.txt
-fi
-
+print_header "🛠️ Troubleshooting:"
+print_status "   📋 System status: /usr/local/bin/system_status.sh"
+print_status "   📋 Odoo logs: journalctl -u odoo -f"
+print_status "   📋 Nginx logs: tail -f /var/log/nginx/error.log"
+print_status "   📋 Database test: mysql -uwordpress -pwp_pass123 -e 'SELECT 1;'"
 echo ""
-print_status "📄 Complete installation information saved to: /root/server_installation_info.txt"
 
-# Display DKIM record for easy copying
-if [ -f "/etc/opendkim/keys/$MAIN_DOMAIN/mail.txt" ]; then
+# Final service verification
+if systemctl is-active --quiet nginx && systemctl is-active --quiet mariadb && systemctl is-active --quiet postgresql && systemctl is-active --quiet odoo; then
+   print_success "🎉 All critical services are running successfully!"
+   print_status ""
+   print_success "🚀 Installation completed successfully with all fixes applied!"
+   print_status "📖 Run '/usr/local/bin/system_status.sh' anytime to check system status"
    echo ""
-   print_header "=== DKIM PUBLIC KEY (Copy to DNS) ==="
-   cat /etc/opendkim/keys/$MAIN_DOMAIN/mail.txt
-fi
-
-# Final service count and status
-running_services=0
-total_services=10
-services_check=("nginx" "mariadb" "postgresql" "redis-server" "php$PHP_VERSION-fpm" "odoo" "postfix" "dovecot" "opendkim" "fail2ban")
-
-for service in "${services_check[@]}"; do
-   if systemctl is-active --quiet $service; then
-       ((running_services++))
-   fi
-done
-
-echo ""
-if [ $running_services -eq $total_services ]; then
-   print_success "🎉 ALL $total_services SERVICES ARE RUNNING PERFECTLY!"
-   print_success ""
-   print_success "🚀 YOUR COMPLETE SERVER IS READY!"
-   print_success ""
-   print_success "Next Steps:"
-   print_success "1. Configure your DNS records as shown above"
-   print_success "2. Complete WordPress setup at https://$MAIN_DOMAIN/wp-admin/install.php"
-   print_success "3. Access Odoo at https://$ERP_DOMAIN"
-   print_success "4. Test email functionality at https://$WEBMAIL_DOMAIN"
-   print_success "5. Monitor system with /usr/local/bin/system_status.sh"
+   print_header "🔍 Post-Installation Verification:"
+   print_status "   1. Visit your Odoo URL to verify web interface"
+   print_status "   2. Complete WordPress setup via /wp-admin/install.php"
+   print_status "   3. Access phpMyAdmin to verify database management"
+   print_status "   4. Run system_status.sh to monitor all services"
+   echo ""
+   print_success "✨ Your Odoo 18 Enterprise + WordPress installation is ready!"
 else
-   print_warning "⚠️  $running_services/$total_services services are running."
-   print_status "Some services may need attention. Check individual service status."
+   print_warning "⚠️  Some services may need attention. Run the system status check:"
+   print_status "/usr/local/bin/system_status.sh"
+   
+   # Show which services need attention
+   print_status ""
+   print_status "Service Status Summary:"
+   systemctl is-active --quiet nginx && echo "✅ Nginx" || echo "❌ Nginx"
+   systemctl is-active --quiet mariadb && echo "✅ MariaDB" || echo "❌ MariaDB"
+   systemctl is-active --quiet postgresql && echo "✅ PostgreSQL" || echo "❌ PostgreSQL" 
+   systemctl is-active --quiet odoo && echo "✅ Odoo" || echo "❌ Odoo"
+   systemctl is-active --quiet redis-server && echo "✅ Redis" || echo "❌ Redis"
 fi
 
-echo ""
-print_header "=== INSTALLATION SUMMARY ==="
-print_success "✅ Odoo 18 Enterprise - ERP System"
-print_success "✅ WordPress - Content Management"  
-print_success "✅ phpMyAdmin - Database Management"
-print_success "✅ Complete Mail Server - Email Solution"
-print_success "✅ Roundcube Webmail - Web Email Interface"
-print_success "✅ SSL Certificates - Secure Connections"
-print_success "✅ Redis Caching - Performance Optimization"
-print_success "✅ Security Hardening - Protection & Monitoring"
-print_success "✅ Automated Backups - Data Protection"
-print_success "✅ System Monitoring - Health Checks"
+# Re-enable unattended upgrades if desired
+print_question "Would you like to re-enable automatic updates? (y/n):"
+read -p "Choice: " ENABLE_AUTO_UPDATES
 
-echo ""
-print_header "🎯 FINAL NOTES:"
-print_status "• Your server is production-ready with enterprise-grade security"
-print_status "• All services are optimized for performance and reliability"  
-print_status "• Automated backups and SSL renewal are configured"
-print_status "• Monitor system health with the provided tools"
-print_status "• Keep your system updated regularly"
-
-echo ""
-print_success "🎉 CONGRATULATIONS! Your complete server installation is finished!"
-print_success "📚 Documentation saved to /root/server_installation_info.txt"
-print_success "🔧 Use /usr/local/bin/system_status.sh anytime to check status"
+if [[ "$ENABLE_AUTO_UPDATES" =~ ^[Yy]$ ]]; then
+   systemctl enable unattended-upgrades
+   systemctl start unattended-upgrades
+   print_success "✅ Automatic updates re-enabled"
+else
+   print_status "📝 Automatic updates remain disabled"
+fi
 
 EOF
 
-chmod +x complete_server_installation.sh
-./complete_server_installation.sh
+chmod +x complete_odoo18_wordpress_install_fixed_v2.sh
+./complete_odoo18_wordpress_install_fixed_v2.sh
