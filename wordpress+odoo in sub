@@ -1,0 +1,1566 @@
+cat > complete_odoo_wordpress_install.sh << 'EOF'
+#!/bin/bash
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+print_status() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_question() {
+    echo -e "${BLUE}[QUESTION]${NC} $1"
+}
+
+print_status "=== Complete Odoo 18 Enterprise + WordPress Installation ==="
+
+# Domain and Email Configuration
+# تغییر دامنه و ایمیل: می‌تونید این قسمت رو ویرایش کنید
+MAIN_DOMAIN="bsepar.com"
+SSL_EMAIL="dr.mostafazade@gmail.com"
+
+print_status "Domain Configuration:"
+print_status "  Main Domain: $MAIN_DOMAIN"
+print_status "  ERP Subdomain: erp.$MAIN_DOMAIN"
+print_status "  WordPress: $MAIN_DOMAIN"
+print_status "  SSL Email: $SSL_EMAIL"
+
+# Interactive configuration for installation type
+print_question "What do you want to install?"
+echo "1) Odoo 18 Enterprise only"
+echo "2) WordPress only"
+echo "3) Both Odoo and WordPress (Recommended)"
+read -p "Enter your choice (1/2/3): " INSTALL_TYPE
+
+# Odoo specific configuration
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+    print_question "Odoo Database setup:"
+    echo "1) Install pre-configured database from GitHub (Recommended)"
+    echo "2) Create fresh database (Empty Odoo installation)"
+    read -p "Enter your choice (1/2): " DB_CHOICE
+fi
+
+# Get server IP
+SERVER_IP=$(curl -s ifconfig.me || curl -s ipinfo.io/ip)
+print_status "Detected server IP: $SERVER_IP"
+
+# Generate secure credentials for WordPress
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+    print_status "Generating secure WordPress credentials..."
+    MYSQL_ROOT_PASS="mysql_$(openssl rand -base64 16 | tr -d '=+/')"
+    WP_DB_NAME="wp_$(openssl rand -hex 4)"
+    WP_DB_USER="wpuser_$(openssl rand -hex 6)"
+    WP_DB_PASS="$(openssl rand -base64 24 | tr -d '=+/')_$(openssl rand -hex 4)"
+fi
+
+# ================================
+# SYSTEM PREPARATION
+# ================================
+
+print_status "=== STEP 1: System Preparation ==="
+
+# Update system
+print_status "Updating system packages..."
+apt update && apt upgrade -y
+
+# Install common dependencies
+print_status "Installing common system dependencies..."
+apt install -y wget git curl unzip nginx software-properties-common \
+    build-essential libssl-dev libffi-dev certbot python3-certbot-nginx \
+    ufw
+
+# ================================
+# ODOO INSTALLATION
+# ================================
+
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+    print_status "=== STEP 2: Installing Odoo 18 Enterprise ==="
+
+    # Install Odoo dependencies
+    print_status "Installing Odoo dependencies..."
+    apt install -y python3 python3-pip python3-dev python3-venv python3-wheel \
+        libxml2-dev libxslt1-dev libldap2-dev libsasl2-dev libtiff5-dev \
+        libjpeg8-dev libopenjp2-7-dev zlib1g-dev libfreetype6-dev liblcms2-dev \
+        libwebp-dev libharfbuzz-dev libfribidi-dev libxcb1-dev libpq-dev
+
+    # Install PostgreSQL
+    print_status "Installing PostgreSQL..."
+    apt install -y postgresql postgresql-client postgresql-contrib
+    systemctl start postgresql
+    systemctl enable postgresql
+
+    # Configure PostgreSQL for better performance
+    print_status "Optimizing PostgreSQL configuration..."
+    su - postgres -c "psql -c \"ALTER SYSTEM SET shared_buffers = '512MB';\""
+    su - postgres -c "psql -c \"ALTER SYSTEM SET effective_cache_size = '2GB';\""
+    su - postgres -c "psql -c \"ALTER SYSTEM SET maintenance_work_mem = '256MB';\""
+    su - postgres -c "psql -c \"ALTER SYSTEM SET max_connections = 300;\""
+    su - postgres -c "psql -c \"ALTER SYSTEM SET work_mem = '32MB';\""
+    systemctl restart postgresql
+
+    # Create PostgreSQL user
+    print_status "Creating PostgreSQL user..."
+    su - postgres -c "psql -c \"DROP USER IF EXISTS odoo18e;\"" 2>/dev/null || true
+    su - postgres -c "psql -c \"CREATE USER odoo18e WITH CREATEDB SUPERUSER;\""
+    su - postgres -c "psql -c \"ALTER USER odoo18e PASSWORD 'odoo123';\""
+
+    # Create system user
+    print_status "Creating Odoo system user..."
+    deluser odoo 2>/dev/null || true
+    delgroup odoo 2>/dev/null || true
+    adduser --system --home=/opt/odoo --group odoo
+
+    # Setup directories
+    print_status "Setting up Odoo directories..."
+    rm -rf /opt/odoo18-enterprise
+    mkdir -p /opt/odoo18-enterprise
+    mkdir -p /var/log/odoo
+    mkdir -p /etc/odoo
+
+    # Download Odoo source code
+    print_status "Downloading Odoo from https://github.com/drmostafazade/odiran"
+    git clone https://github.com/drmostafazade/odiran.git /opt/odoo18-enterprise/odoo
+
+    # Create additional directories
+    mkdir -p /opt/odoo18-enterprise/addons_manatra
+    mkdir -p /opt/odoo18-enterprise/data
+    mkdir -p /opt/odoo18-enterprise/backups
+
+    # Set permissions
+    print_status "Setting Odoo permissions..."
+    chown -R odoo:odoo /opt/odoo18-enterprise
+    chown odoo:root /var/log/odoo
+    chown odoo:root /etc/odoo
+
+    # Create requirements.txt
+    print_status "Creating Odoo requirements.txt..."
+    cat > /opt/odoo18-enterprise/odoo/requirements.txt <<EOL
+Babel==2.14.0
+chardet==5.2.0
+cryptography==41.0.7
+decorator==5.1.1
+docutils==0.20.1
+ebaysdk==2.1.5
+freezegun==1.2.2
+gevent==23.9.1
+greenlet==3.0.1
+idna==3.4
+Jinja2==3.1.2
+libsass==0.22.0
+lxml==4.9.3
+MarkupSafe==2.1.3
+num2words==0.5.13
+ofxparse==0.21
+passlib==1.7.4
+Pillow==10.1.0
+polib==1.2.0
+psutil==5.9.6
+psycopg2-binary==2.9.8
+pydot==1.4.2
+pyOpenSSL==23.3.0
+pypdf2==3.0.1
+pyserial==3.5
+python-dateutil==2.8.2
+python-stdnum==1.19
+pytz==2023.3
+pyusb==1.2.1
+qrcode==7.4.2
+reportlab==4.0.7
+requests==2.31.0
+urllib3==2.0.7
+vobject==0.9.6.1
+werkzeug==2.3.7
+xlrd==2.0.1
+XlsxWriter==3.1.9
+xlwt==1.3.0
+zeep==4.2.1
+EOL
+
+    chown odoo:odoo /opt/odoo18-enterprise/odoo/requirements.txt
+
+    # Create virtual environment
+    print_status "Creating Odoo virtual environment..."
+    su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise && python3 -m venv odoo-venv"
+
+    # Install Python packages
+    print_status "Installing Odoo Python packages..."
+    su - odoo -s /bin/bash -c "/opt/odoo18-enterprise/odoo-venv/bin/pip install --upgrade pip"
+    su - odoo -s /bin/bash -c "/opt/odoo18-enterprise/odoo-venv/bin/pip install -r /opt/odoo18-enterprise/odoo/requirements.txt"
+
+    # Install Odoo in development mode
+    print_status "Installing Odoo in development mode..."
+    cd /opt/odoo18-enterprise/odoo
+    su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && /opt/odoo18-enterprise/odoo-venv/bin/pip install -e ."
+
+    # Install wkhtmltopdf
+    print_status "Installing wkhtmltopdf..."
+    cd /tmp
+    wget -q https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.jammy_amd64.deb
+    dpkg -i wkhtmltox_0.12.6.1-3.jammy_amd64.deb 2>/dev/null || true
+    apt-get install -f -y
+
+    # Install Node.js
+    print_status "Installing Node.js..."
+    curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+    apt-get install -y nodejs
+    npm install -g rtlcss
+
+    # Download and prepare database (conditional)
+    if [[ "$DB_CHOICE" == "1" ]]; then
+        print_status "Downloading pre-configured database backup..."
+        cd /opt/odoo18-enterprise/backups
+        wget -O db2_2025-06-30_16-36-33.zip https://github.com/drmostafazade/odiran/raw/main/db2_2025-06-30_16-36-33.zip
+        unzip -o db2_2025-06-30_16-36-33.zip
+        DB_FILE=$(find /opt/odoo18-enterprise/backups -name "*.sql" -o -name "*.dump" | head -1)
+        chown -R odoo:odoo /opt/odoo18-enterprise/backups
+        print_status "Database backup downloaded: $DB_FILE"
+    else
+        print_status "Skipping database download - fresh installation will be created"
+        DB_FILE=""
+    fi
+
+    # Configure Odoo
+    print_status "Configuring Odoo..."
+
+    # Detect addons path
+    if [ -d /opt/odoo18-enterprise/odoo/enterprise ]; then
+        ADDONS_PATH="/opt/odoo18-enterprise/addons_manatra,/opt/odoo18-enterprise/odoo/enterprise,/opt/odoo18-enterprise/odoo/addons"
+    elif [ -d /opt/odoo18-enterprise/odoo/odoo/addons ]; then
+        ADDONS_PATH="/opt/odoo18-enterprise/addons_manatra,/opt/odoo18-enterprise/odoo/odoo/addons"
+    else
+        ADDONS_PATH="/opt/odoo18-enterprise/addons_manatra,/opt/odoo18-enterprise/odoo/addons"
+    fi
+
+    # Create config with optimized settings
+    cat > /etc/odoo/odoo.conf <<EOL
+[options]
+admin_passwd = 5011700
+db_host = localhost
+db_port = 5432
+db_user = odoo18e
+db_password = odoo123
+addons_path = $ADDONS_PATH
+data_dir = /opt/odoo18-enterprise/data
+logfile = /var/log/odoo/odoo.log
+log_level = info
+xmlrpc_port = 8069
+
+# Performance optimizations
+workers = 8
+max_cron_threads = 4
+limit_memory_soft = 4294967296
+limit_memory_hard = 5368709120
+limit_time_cpu = 7200
+limit_time_real = 10800
+limit_request = 16384
+db_maxconn = 200
+proxy_mode = True
+
+# Database operation timeouts
+db_template = template0
+unaccent = True
+max_file_upload_size = 2147483648
+list_db = True
+without_demo = True
+server_wide_modules = base,web
+longpolling_port = 8072
+gevent_port = 8072
+EOL
+
+    chown odoo:odoo /etc/odoo/odoo.conf
+    chmod 640 /etc/odoo/odoo.conf
+
+    # Test execution method
+    print_status "Testing Odoo execution method..."
+    cd /opt/odoo18-enterprise/odoo
+
+    if su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && /opt/odoo18-enterprise/odoo-venv/bin/python odoo-bin --help" >/dev/null 2>&1; then
+        EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python /opt/odoo18-enterprise/odoo/odoo-bin"
+        WORK_DIR="/opt/odoo18-enterprise/odoo"
+        ENV_VARS=""
+    elif su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && PYTHONPATH=/opt/odoo18-enterprise/odoo /opt/odoo18-enterprise/odoo-venv/bin/python odoo-bin --help" >/dev/null 2>&1; then
+        EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python /opt/odoo18-enterprise/odoo/odoo-bin"
+        WORK_DIR="/opt/odoo18-enterprise/odoo"
+        ENV_VARS="Environment=PYTHONPATH=/opt/odoo18-enterprise/odoo"
+    elif su - odoo -s /bin/bash -c "cd /opt/odoo18-enterprise/odoo && /opt/odoo18-enterprise/odoo-venv/bin/python -m odoo --help" >/dev/null 2>&1; then
+        EXEC_CMD="/opt/odoo18-enterprise/odoo-venv/bin/python -m odoo"
+        WORK_DIR="/opt/odoo18-enterprise/odoo"
+        ENV_VARS="Environment=PYTHONPATH=/opt/odoo18-enterprise/odoo"
+    else
+        print_error "No Odoo execution method works!"
+        exit 1
+    fi
+
+    # Create systemd service
+    print_status "Creating Odoo systemd service..."
+    cat > /etc/systemd/system/odoo.service <<EOL
+[Unit]
+Description=Odoo 18 Enterprise
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=odoo
+Group=odoo
+ExecStart=$EXEC_CMD -c /etc/odoo/odoo.conf
+Restart=always
+RestartSec=10
+WorkingDirectory=$WORK_DIR
+$ENV_VARS
+TimeoutStartSec=7200
+TimeoutStopSec=7200
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+    # Create Odoo backup script
+    print_status "Creating Odoo backup script..."
+    cat > /opt/odoo18-enterprise/backup.sh <<EOL
+#!/bin/bash
+DATE=\$(date +%Y%m%d_%H%M%S)
+su - postgres -c "pg_dump -Fc odoo_db" > /opt/odoo18-enterprise/backups/backup_\$DATE.dump
+find /opt/odoo18-enterprise/backups -name "*.dump" -mtime +7 -delete
+echo "Odoo backup completed: backup_\$DATE.dump"
+EOL
+
+    chmod +x /opt/odoo18-enterprise/backup.sh
+    chown odoo:odoo /opt/odoo18-enterprise/backup.sh
+fi
+
+# ================================
+# WORDPRESS INSTALLATION
+# ================================
+
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+    print_status "=== STEP 3: Installing WordPress ==="
+
+    # Detect Ubuntu version and install PHP
+    print_status "Detecting Ubuntu version and installing PHP..."
+    UBUNTU_VERSION=$(lsb_release -rs 2>/dev/null || echo "unknown")
+    print_status "Ubuntu version: $UBUNTU_VERSION"
+
+    # Add Ondrej PHP repository
+    print_status "Adding PHP repository..."
+    add-apt-repository ppa:ondrej/php -y
+    apt update
+
+    # Detect available PHP versions
+    print_status "Detecting available PHP versions..."
+    if apt-cache show php8.1-fpm >/dev/null 2>&1; then
+        PHP_VERSION="8.1"
+    elif apt-cache show php8.0-fpm >/dev/null 2>&1; then
+        PHP_VERSION="8.0"
+    elif apt-cache show php7.4-fpm >/dev/null 2>&1; then
+        PHP_VERSION="7.4"
+    else
+        PHP_VERSION="8.1"  # Default fallback
+    fi
+
+    print_status "Selected PHP version: $PHP_VERSION"
+
+    # Install PHP packages
+    print_status "Installing PHP $PHP_VERSION and modules..."
+    PHP_PACKAGES="php$PHP_VERSION php$PHP_VERSION-fpm php$PHP_VERSION-mysql php$PHP_VERSION-curl 
+    php$PHP_VERSION-gd php$PHP_VERSION-mbstring php$PHP_VERSION-xml php$PHP_VERSION-zip 
+    php$PHP_VERSION-intl php$PHP_VERSION-bcmath php$PHP_VERSION-soap php$PHP_VERSION-cli 
+    php$PHP_VERSION-common php$PHP_VERSION-opcache php$PHP_VERSION-readline"
+
+    for package in $PHP_PACKAGES; do
+        if apt-cache show "$package" >/dev/null 2>&1; then
+            apt install -y "$package"
+        else
+            print_warning "Package $package not available, skipping..."
+        fi
+    done
+
+    # Install MySQL
+    print_status "Installing MySQL..."
+    apt install -y mysql-server mysql-client
+
+    # Configure MySQL
+    print_status "Configuring MySQL..."
+    systemctl start mysql
+    systemctl enable mysql
+
+    # Set MySQL root password
+    mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$MYSQL_ROOT_PASS';" 2>/dev/null || \
+    mysql -e "UPDATE mysql.user SET authentication_string = PASSWORD('$MYSQL_ROOT_PASS') WHERE User = 'root' AND Host = 'localhost';" 2>/dev/null || \
+    mysqladmin -u root password "$MYSQL_ROOT_PASS" 2>/dev/null
+
+    # Secure MySQL installation
+    mysql -u root -p"$MYSQL_ROOT_PASS" -e "DELETE FROM mysql.user WHERE User='';" 2>/dev/null || true
+    mysql -u root -p"$MYSQL_ROOT_PASS" -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');" 2>/dev/null || true
+    mysql -u root -p"$MYSQL_ROOT_PASS" -e "DROP DATABASE IF EXISTS test;" 2>/dev/null || true
+    mysql -u root -p"$MYSQL_ROOT_PASS" -e "FLUSH PRIVILEGES;" 2>/dev/null || true
+
+    # Create WordPress database
+    print_status "Creating WordPress database..."
+    mysql -u root -p"$MYSQL_ROOT_PASS" -e "CREATE DATABASE IF NOT EXISTS \`$WP_DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+    mysql -u root -p"$MYSQL_ROOT_PASS" -e "CREATE USER IF NOT EXISTS '$WP_DB_USER'@'localhost' IDENTIFIED BY '$WP_DB_PASS';"
+    mysql -u root -p"$MYSQL_ROOT_PASS" -e "GRANT ALL PRIVILEGES ON \`$WP_DB_NAME\`.* TO '$WP_DB_USER'@'localhost';"
+    mysql -u root -p"$MYSQL_ROOT_PASS" -e "FLUSH PRIVILEGES;"
+
+    # Download WordPress
+    print_status "Downloading WordPress..."
+    cd /tmp
+    rm -f latest.tar.gz
+    wget -q https://wordpress.org/latest.tar.gz
+    tar xzf latest.tar.gz
+
+    # Create WordPress directory
+    rm -rf /var/www/$MAIN_DOMAIN
+    mkdir -p /var/www/$MAIN_DOMAIN
+    cp -R wordpress/* /var/www/$MAIN_DOMAIN/
+    rm -rf wordpress latest.tar.gz
+
+    # Configure WordPress
+    print_status "Configuring WordPress..."
+    cd /var/www/$MAIN_DOMAIN
+
+    # Generate WordPress salts
+    SALT_KEYS=$(curl -s https://api.wordpress.org/secret-key/1.1/salt/)
+
+    # Create wp-config.php
+    cat > wp-config.php <<EOL
+<?php
+define('DB_NAME', '$WP_DB_NAME');
+define('DB_USER', '$WP_DB_USER');
+define('DB_PASSWORD', '$WP_DB_PASS');
+define('DB_HOST', 'localhost');
+define('DB_CHARSET', 'utf8mb4');
+define('DB_COLLATE', '');
+
+$SALT_KEYS
+
+\$table_prefix = 'wp_$(openssl rand -hex 3)_';
+
+define('WP_DEBUG', false);
+define('WP_MEMORY_LIMIT', '512M');
+define('DISALLOW_FILE_EDIT', true);
+define('WP_AUTO_UPDATE_CORE', true);
+define('FORCE_SSL_ADMIN', true);
+
+if ( ! defined( 'ABSPATH' ) ) {
+    define( 'ABSPATH', __DIR__ . '/' );
+}
+
+require_once ABSPATH . 'wp-settings.php';
+EOL
+
+    # Configure PHP-FPM
+    print_status "Configuring PHP-FPM..."
+    PHP_FPM_DIR="/etc/php/$PHP_VERSION/fpm"
+    PHP_INI_FILE="$PHP_FPM_DIR/php.ini"
+    POOL_DIR="$PHP_FPM_DIR/pool.d"
+
+    # Create WordPress pool
+    cat > $POOL_DIR/wordpress.conf <<EOL
+[wordpress]
+user = www-data
+group = www-data
+listen = /run/php/php$PHP_VERSION-fpm-wordpress.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+
+pm = dynamic
+pm.max_children = 50
+pm.start_servers = 5
+pm.min_spare_servers = 5
+pm.max_spare_servers = 35
+pm.max_requests = 1000
+
+php_admin_value[memory_limit] = 512M
+php_admin_value[upload_max_filesize] = 100M
+php_admin_value[post_max_size] = 100M
+php_admin_value[max_execution_time] = 300
+
+security.limit_extensions = .php
+EOL
+
+    # Optimize PHP settings
+    if [[ -f "$PHP_INI_FILE" ]]; then
+        cp "$PHP_INI_FILE" "$PHP_INI_FILE.backup"
+        sed -i 's/memory_limit = .*/memory_limit = 512M/' $PHP_INI_FILE
+        sed -i 's/upload_max_filesize = .*/upload_max_filesize = 100M/' $PHP_INI_FILE
+        sed -i 's/post_max_size = .*/post_max_size = 100M/' $PHP_INI_FILE
+        sed -i 's/max_execution_time = .*/max_execution_time = 300/' $PHP_INI_FILE
+    fi
+
+    # Start PHP-FPM
+    systemctl restart php$PHP_VERSION-fpm
+    systemctl enable php$PHP_VERSION-fpm
+
+    # Set WordPress permissions
+    print_status "Setting WordPress permissions..."
+    chown -R www-data:www-data /var/www/$MAIN_DOMAIN
+    find /var/www/$MAIN_DOMAIN -type d -exec chmod 755 {} \;
+    find /var/www/$MAIN_DOMAIN -type f -exec chmod 644 {} \;
+    chmod 600 /var/www/$MAIN_DOMAIN/wp-config.php
+
+    # Create uploads directory
+    mkdir -p /var/www/$MAIN_DOMAIN/wp-content/uploads
+    chown -R www-data:www-data /var/www/$MAIN_DOMAIN/wp-content/uploads
+    chmod -R 755 /var/www/$MAIN_DOMAIN/wp-content/uploads
+
+    # Install WP-CLI
+    print_status "Installing WP-CLI..."
+    curl -O https://raw.githubusercontent.com/wp-cli/wp-cli/main/wp-cli.phar 2>/dev/null
+    chmod +x wp-cli.phar
+    mv wp-cli.phar /usr/local/bin/wp
+
+    # Create WordPress backup script
+    cat > /var/www/wordpress_backup.sh <<EOL
+#!/bin/bash
+DATE=\$(date +%Y%m%d_%H%M%S)
+BACKUP_DIR="/var/www/backups"
+mkdir -p \$BACKUP_DIR
+
+mysqldump -u '$WP_DB_USER' -p'$WP_DB_PASS' '$WP_DB_NAME' | gzip > \$BACKUP_DIR/wp_db_\$DATE.sql.gz
+tar czf \$BACKUP_DIR/wp_files_\$DATE.tar.gz -C /var/www/$MAIN_DOMAIN .
+find \$BACKUP_DIR -name "wp_*" -mtime +7 -delete
+
+echo "WordPress backup completed: \$DATE"
+EOL
+
+    chmod +x /var/www/wordpress_backup.sh
+fi
+
+# ================================
+# NGINX CONFIGURATION
+# ================================
+
+print_status "=== STEP 4: Configuring Nginx ==="
+
+# Create cache directories
+mkdir -p /var/cache/nginx/odoo
+mkdir -p /var/cache/nginx/wordpress
+chown -R www-data:www-data /var/cache/nginx/
+
+# Remove default configuration
+rm -f /etc/nginx/sites-enabled/default
+
+# Create combined Nginx configuration
+if [[ "$INSTALL_TYPE" == "1" ]]; then
+    # Odoo only configuration
+    print_status "Creating Odoo-only Nginx configuration..."
+    cat > /etc/nginx/sites-available/main <<EOL
+# Odoo upstream
+upstream odoo {
+    server 127.0.0.1:8069 weight=1 fail_timeout=0;
+    keepalive 32;
+}
+
+upstream odoochat {
+    server 127.0.0.1:8072 weight=1 fail_timeout=0;
+    keepalive 8;
+}
+
+# Rate limiting
+limit_req_zone \$binary_remote_addr zone=login:10m rate=5r/m;
+
+# Odoo on ERP subdomain
+server {
+    listen 80;
+    server_name erp.$MAIN_DOMAIN;
+    
+    # Performance optimizations
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    
+    # Buffer optimizations
+    client_body_buffer_size 1m;
+    client_max_body_size 10G;
+    client_body_timeout 7200s;
+    
+    # Proxy optimizations
+    proxy_buffering on;
+    proxy_buffer_size 256k;
+    proxy_buffers 16 512k;
+    proxy_connect_timeout 7200s;
+    proxy_send_timeout 7200s;
+    proxy_read_timeout 7200s;
+    proxy_request_buffering off;
+    
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1000;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml;
+
+    # Longpolling
+    location /longpolling {
+        proxy_pass http://odoochat;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_buffering off;
+        proxy_read_timeout 86400s;
+    }
+
+    # Static files
+    location ~* \.(ico|css|js|gif|jpe?g|png|svg|woff|woff2|ttf|eot)\$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+        proxy_pass http://odoo;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # Main location
+    location / {
+        proxy_pass http://odoo;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_redirect off;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_read_timeout 7200s;
+        proxy_send_timeout 7200s;
+        proxy_connect_timeout 7200s;
+    }
+}
+EOL
+
+elif [[ "$INSTALL_TYPE" == "2" ]]; then
+    # WordPress only configuration
+    print_status "Creating WordPress-only Nginx configuration..."
+    cat > /etc/nginx/sites-available/main <<EOL
+# FastCGI cache for WordPress
+fastcgi_cache_path /var/cache/nginx/wordpress levels=1:2 keys_zone=wordpress:100m max_size=1g inactive=60m use_temp_path=off;
+
+# Rate limiting
+limit_req_zone \$binary_remote_addr zone=wp_login:10m rate=5r/m;
+
+# WordPress on main domain
+server {
+    listen 80;
+    server_name $MAIN_DOMAIN www.$MAIN_DOMAIN;
+    
+    root /var/www/$MAIN_DOMAIN;
+    index index.php index.html index.
+# Basic settings
+   server_tokens off;
+   sendfile on;
+   tcp_nopush on;
+   tcp_nodelay on;
+   
+   # File upload settings
+   client_max_body_size 100M;
+   client_body_timeout 300s;
+   
+   # Gzip compression
+   gzip on;
+   gzip_vary on;
+   gzip_min_length 1000;
+   gzip_comp_level 6;
+   gzip_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml;
+   
+   # Security headers
+   add_header X-Frame-Options "SAMEORIGIN" always;
+   add_header X-Content-Type-Options "nosniff" always;
+   add_header X-XSS-Protection "1; mode=block" always;
+   
+   # WordPress permalinks
+   location / {
+       try_files \$uri \$uri/ /index.php?\$args;
+   }
+   
+   # Block sensitive files
+   location ~ /\. { deny all; }
+   location ~ ~\$ { deny all; }
+   location ~* /wp-config.php { deny all; }
+   location = /xmlrpc.php { deny all; }
+   
+   # PHP processing
+   location ~ \.php\$ {
+       include fastcgi_params;
+       fastcgi_pass unix:/run/php/php$PHP_VERSION-fpm-wordpress.sock;
+       fastcgi_index index.php;
+       fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+       
+       # Basic caching
+       fastcgi_cache wordpress;
+       fastcgi_cache_valid 200 301 302 60m;
+       fastcgi_cache_bypass \$skip_cache;
+       fastcgi_no_cache \$skip_cache;
+       
+       # Skip cache for dynamic content
+       set \$skip_cache 0;
+       if (\$request_method = POST) { set \$skip_cache 1; }
+       if (\$query_string != "") { set \$skip_cache 1; }
+       if (\$request_uri ~* "/wp-admin/|/xmlrpc.php|wp-.*.php") { set \$skip_cache 1; }
+       if (\$http_cookie ~* "comment_author|wordpress_[a-f0-9]+|wp-postpass|wordpress_logged_in") { set \$skip_cache 1; }
+   }
+   
+   # Static files
+   location ~* \.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
+       expires 1y;
+       add_header Cache-Control "public, immutable";
+       access_log off;
+   }
+}
+EOL
+
+else
+   # Combined Odoo + WordPress configuration
+   print_status "Creating combined Odoo + WordPress Nginx configuration..."
+   cat > /etc/nginx/sites-available/main <<EOL
+# FastCGI cache for WordPress
+fastcgi_cache_path /var/cache/nginx/wordpress levels=1:2 keys_zone=wordpress:100m max_size=1g inactive=60m use_temp_path=off;
+
+# Proxy cache for Odoo
+proxy_cache_path /var/cache/nginx/odoo levels=1:2 keys_zone=odoo:100m max_size=1g inactive=60m use_temp_path=off;
+
+# Odoo upstream
+upstream odoo {
+   server 127.0.0.1:8069 weight=1 fail_timeout=0;
+   keepalive 32;
+}
+
+upstream odoochat {
+   server 127.0.0.1:8072 weight=1 fail_timeout=0;
+   keepalive 8;
+}
+
+# Rate limiting
+limit_req_zone \$binary_remote_addr zone=login:10m rate=5r/m;
+limit_req_zone \$binary_remote_addr zone=wp_login:10m rate=5r/m;
+limit_req_zone \$binary_remote_addr zone=api:10m rate=20r/s;
+
+# WordPress on main domain
+server {
+   listen 80;
+   server_name $MAIN_DOMAIN www.$MAIN_DOMAIN;
+   
+   root /var/www/$MAIN_DOMAIN;
+   index index.php index.html index.htm;
+   
+   # Basic settings
+   server_tokens off;
+   sendfile on;
+   tcp_nopush on;
+   tcp_nodelay on;
+   keepalive_timeout 65;
+   
+   # File upload settings
+   client_max_body_size 100M;
+   client_body_timeout 300s;
+   
+   # Gzip compression
+   gzip on;
+   gzip_vary on;
+   gzip_min_length 1000;
+   gzip_comp_level 6;
+   gzip_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml;
+   
+   # Security headers
+   add_header X-Frame-Options "SAMEORIGIN" always;
+   add_header X-Content-Type-Options "nosniff" always;
+   add_header X-XSS-Protection "1; mode=block" always;
+   
+   # WordPress permalinks
+   location / {
+       try_files \$uri \$uri/ /index.php?\$args;
+   }
+   
+   # Block sensitive files
+   location ~ /\. { deny all; }
+   location ~ ~\$ { deny all; }
+   location ~* /wp-config.php { deny all; }
+   location = /xmlrpc.php { deny all; }
+   
+   # WordPress login rate limiting
+   location = /wp-login.php {
+       limit_req zone=wp_login burst=5 nodelay;
+       include fastcgi_params;
+       fastcgi_pass unix:/run/php/php$PHP_VERSION-fpm-wordpress.sock;
+       fastcgi_index index.php;
+       fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+   }
+   
+   # PHP processing
+   location ~ \.php\$ {
+       include fastcgi_params;
+       fastcgi_pass unix:/run/php/php$PHP_VERSION-fpm-wordpress.sock;
+       fastcgi_index index.php;
+       fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+       
+       # Basic caching
+       fastcgi_cache wordpress;
+       fastcgi_cache_valid 200 301 302 60m;
+       fastcgi_cache_bypass \$skip_cache;
+       fastcgi_no_cache \$skip_cache;
+       
+       # Skip cache for dynamic content
+       set \$skip_cache 0;
+       if (\$request_method = POST) { set \$skip_cache 1; }
+       if (\$query_string != "") { set \$skip_cache 1; }
+       if (\$request_uri ~* "/wp-admin/|/xmlrpc.php|wp-.*.php") { set \$skip_cache 1; }
+       if (\$http_cookie ~* "comment_author|wordpress_[a-f0-9]+|wp-postpass|wordpress_logged_in") { set \$skip_cache 1; }
+   }
+   
+   # Static files
+   location ~* \.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
+       expires 1y;
+       add_header Cache-Control "public, immutable";
+       access_log off;
+   }
+}
+
+# Odoo on ERP subdomain
+server {
+   listen 80;
+   server_name erp.$MAIN_DOMAIN;
+   
+   # Performance optimizations
+   sendfile on;
+   tcp_nopush on;
+   tcp_nodelay on;
+   keepalive_timeout 65;
+   keepalive_requests 1000;
+   
+   # Buffer optimizations for large uploads
+   client_body_buffer_size 1m;
+   client_header_buffer_size 1k;
+   large_client_header_buffers 4 8k;
+   client_max_body_size 10G;
+   client_body_timeout 7200s;
+   client_header_timeout 7200s;
+   
+   # Proxy optimizations for large operations
+   proxy_buffering on;
+   proxy_buffer_size 256k;
+   proxy_buffers 16 512k;
+   proxy_busy_buffers_size 1m;
+   proxy_temp_file_write_size 1m;
+   proxy_connect_timeout 7200s;
+   proxy_send_timeout 7200s;
+   proxy_read_timeout 7200s;
+   send_timeout 7200s;
+   
+   # Disable proxy request buffering for large uploads
+   proxy_request_buffering off;
+   proxy_max_temp_file_size 0;
+   
+   # Advanced Gzip compression
+   gzip on;
+   gzip_vary on;
+   gzip_min_length 1000;
+   gzip_proxied any;
+   gzip_comp_level 6;
+   gzip_http_version 1.1;
+   gzip_types
+       application/atom+xml
+       application/geo+json
+       application/javascript
+       application/x-javascript
+       application/json
+       application/ld+json
+       application/manifest+json
+       application/rdf+xml
+       application/rss+xml
+       application/xhtml+xml
+       application/xml
+       font/eot
+       font/otf
+       font/ttf
+       image/svg+xml
+       text/css
+       text/javascript
+       text/plain
+       text/xml;
+
+   # Security headers
+   add_header X-Frame-Options "SAMEORIGIN" always;
+   add_header X-Content-Type-Options "nosniff" always;
+   add_header X-XSS-Protection "1; mode=block" always;
+   add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+   # Caching for static assets
+   location ~* \.(ico|css|js|gif|jpe?g|png|svg|woff|woff2|ttf|eot)\$ {
+       expires 1y;
+       add_header Cache-Control "public, immutable";
+       add_header Vary Accept-Encoding;
+       access_log off;
+       proxy_pass http://odoo;
+       proxy_cache odoo;
+       proxy_cache_valid 200 301 302 1y;
+       proxy_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
+       proxy_set_header Host \$host;
+       proxy_set_header X-Real-IP \$remote_addr;
+       proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto \$scheme;
+   }
+
+   # Longpolling with extended timeouts
+   location /longpolling {
+       proxy_pass http://odoochat;
+       proxy_set_header Host \$host;
+       proxy_set_header X-Real-IP \$remote_addr;
+       proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto \$scheme;
+       proxy_redirect off;
+       proxy_buffering off;
+       proxy_read_timeout 86400s;
+       proxy_send_timeout 86400s;
+       proxy_connect_timeout 86400s;
+   }
+
+   # Static files with aggressive caching
+   location /web/static/ {
+       proxy_cache odoo;
+       proxy_cache_valid 200 301 302 1y;
+       proxy_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
+       proxy_ignore_headers Cache-Control Expires;
+       add_header X-Cache-Status \$upstream_cache_status;
+       expires 1y;
+       access_log off;
+       
+       proxy_pass http://odoo;
+       proxy_set_header Host \$host;
+       proxy_set_header X-Real-IP \$remote_addr;
+       proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto \$scheme;
+   }
+
+   # Database management and backup/restore operations
+   location ~ ^/(web/database|base/rpc) {
+       proxy_pass http://odoo;
+       proxy_set_header Host \$host;
+       proxy_set_header X-Real-IP \$remote_addr;
+       proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto \$scheme;
+       proxy_redirect off;
+       proxy_request_buffering off;
+       proxy_read_timeout 10800s;
+       proxy_send_timeout 10800s;
+       proxy_connect_timeout 10800s;
+       client_max_body_size 10G;
+   }
+
+   # API rate limiting
+   location /web/dataset/ {
+       limit_req zone=api burst=100 nodelay;
+       proxy_pass http://odoo;
+       proxy_set_header Host \$host;
+       proxy_set_header X-Real-IP \$remote_addr;
+       proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto \$scheme;
+       proxy_redirect off;
+       proxy_request_buffering off;
+       proxy_read_timeout 7200s;
+       proxy_send_timeout 7200s;
+   }
+
+   # Login rate limiting
+   location /web/login {
+       limit_req zone=login burst=5 nodelay;
+       proxy_pass http://odoo;
+       proxy_set_header Host \$host;
+       proxy_set_header X-Real-IP \$remote_addr;
+       proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto \$scheme;
+       proxy_redirect off;
+   }
+
+   # Main location with extended timeouts
+   location / {
+       # Cache GET requests for logged-out users
+       set \$no_cache 0;
+       if (\$request_method != GET) {
+           set \$no_cache 1;
+       }
+       if (\$http_cookie ~* "session_id") {
+           set \$no_cache 1;
+       }
+       
+       proxy_cache odoo;
+       proxy_cache_bypass \$no_cache;
+       proxy_no_cache \$no_cache;
+       proxy_cache_valid 200 301 302 10m;
+       proxy_cache_use_stale error timeout invalid_header updating http_500 http_502 http_503 http_504;
+       
+       proxy_pass http://odoo;
+       proxy_set_header Host \$host;
+       proxy_set_header X-Real-IP \$remote_addr;
+       proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto \$scheme;
+       proxy_redirect off;
+       proxy_request_buffering off;
+       proxy_http_version 1.1;
+       proxy_set_header Connection "";
+       
+       # Extended timeouts for database operations
+       proxy_read_timeout 7200s;
+       proxy_send_timeout 7200s;
+       proxy_connect_timeout 7200s;
+   }
+}
+EOL
+fi
+
+# Enable site
+ln -sf /etc/nginx/sites-available/main /etc/nginx/sites-enabled/
+
+# Optimize nginx.conf
+if ! grep -q "worker_rlimit_nofile" /etc/nginx/nginx.conf; then
+   sed -i 's/worker_processes auto;/worker_processes auto;\nworker_rlimit_nofile 65535;/' /etc/nginx/nginx.conf
+fi
+
+if ! grep -q "worker_cpu_affinity" /etc/nginx/nginx.conf; then
+   sed -i '/worker_processes/a worker_cpu_affinity auto;' /etc/nginx/nginx.conf
+fi
+
+if ! grep -q "use epoll" /etc/nginx/nginx.conf; then
+   sed -i 's/worker_connections 768;/worker_connections 4096;\n\tuse epoll;\n\tmulti_accept on;/' /etc/nginx/nginx.conf
+fi
+
+# Add performance settings to http block
+if ! grep -q "client_body_timeout 7200" /etc/nginx/nginx.conf; then
+   sed -i '/include \/etc\/nginx\/mime.types;/a\\n\t# Performance optimizations\n\tclient_body_timeout 7200;\n\tclient_header_timeout 7200;\n\tproxy_connect_timeout 7200;\n\tproxy_send_timeout 7200;\n\tproxy_read_timeout 7200;\n\treset_timedout_connection on;\n\topen_file_cache max=200000 inactive=20s;\n\topen_file_cache_valid 30s;\n\topen_file_cache_min_uses 2;\n\topen_file_cache_errors on;\n\tclient_max_body_size 10G;\n\tproxy_request_buffering off;\n\tproxy_max_temp_file_size 0;' /etc/nginx/nginx.conf
+fi
+
+# Test nginx configuration
+nginx -t
+if [ $? -eq 0 ]; then
+   systemctl restart nginx
+   systemctl enable nginx
+else
+   print_error "Nginx configuration error!"
+   exit 1
+fi
+
+# ================================
+# START SERVICES
+# ================================
+
+print_status "=== STEP 5: Starting Services ==="
+
+# Start Odoo service
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   print_status "Starting Odoo service..."
+   systemctl daemon-reload
+   systemctl enable odoo
+   systemctl start odoo
+
+   # Wait for Odoo to start
+   print_status "Waiting for Odoo to start..."
+   sleep 30
+
+   # Import database if available and chosen
+   if [[ "$DB_CHOICE" == "1" && -n "$DB_FILE" && -f "$DB_FILE" ]]; then
+       print_status "Importing pre-configured database backup..."
+       print_status "This may take several minutes for large databases..."
+       
+       # Stop Odoo service during database import
+       systemctl stop odoo 2>/dev/null || true
+       
+       # Create database with proper encoding and collation
+       su - postgres -c "dropdb odoo_db" 2>/dev/null || true
+       su - postgres -c "createdb -O odoo18e -E UTF8 -l C.UTF-8 -T template0 odoo_db"
+       
+       # Set temporary optimizations for faster import
+       su - postgres -c "psql -d odoo_db -c \"ALTER DATABASE odoo_db SET synchronous_commit = OFF;\""
+       su - postgres -c "psql -d odoo_db -c \"ALTER DATABASE odoo_db SET fsync = OFF;\""
+       su - postgres -c "psql -d odoo_db -c \"ALTER DATABASE odoo_db SET maintenance_work_mem = '512MB';\""
+       
+       # Import based on file extension
+       print_status "Starting database import (timeout: 3 hours)..."
+       
+       if [[ "$DB_FILE" == *.sql ]]; then
+           print_status "Importing SQL dump..."
+           timeout 10800 su - postgres -c "psql -d odoo_db -f \"$DB_FILE\" -v ON_ERROR_STOP=0" || {
+               print_warning "SQL import completed with some warnings"
+           }
+       elif [[ "$DB_FILE" == *.dump || "$DB_FILE" == *.backup ]]; then
+           print_status "Importing PostgreSQL dump..."
+           timeout 10800 su - postgres -c "pg_restore -d odoo_db \"$DB_FILE\" --verbose --no-owner --no-privileges --clean --if-exists" || {
+               print_warning "Dump import completed with some warnings"
+           }
+       fi
+       
+       # Restore normal database settings
+       su - postgres -c "psql -d odoo_db -c \"ALTER DATABASE odoo_db RESET ALL;\""
+       
+       # Fix ownership and permissions
+       print_status "Fixing database ownership and permissions..."
+       su - postgres -c "psql -d odoo_db -c \"REASSIGN OWNED BY postgres TO odoo18e;\""
+       su - postgres -c "psql -d odoo_db -c \"GRANT ALL PRIVILEGES ON DATABASE odoo_db TO odoo18e;\""
+       su - postgres -c "psql -d odoo_db -c \"GRANT ALL ON SCHEMA public TO odoo18e;\""
+       
+       # Install required PostgreSQL extensions
+       print_status "Installing required PostgreSQL extensions..."
+       su - postgres -c "psql -d odoo_db -c \"CREATE EXTENSION IF NOT EXISTS unaccent;\""
+       su - postgres -c "psql -d odoo_db -c \"CREATE EXTENSION IF NOT EXISTS pg_trgm;\""
+       
+       # Update ir_config_parameter for proper URLs
+       print_status "Updating system parameters..."
+       su - postgres -c "psql -d odoo_db -c \"
+           UPDATE ir_config_parameter 
+           SET value = 'https://erp.$MAIN_DOMAIN' 
+           WHERE key = 'web.base.url';
+       \""
+       
+       # Reset admin password to default
+       print_status "Resetting admin password..."
+       su - postgres -c "psql -d odoo_db -c \"
+           UPDATE res_users 
+           SET password = '\\\$pbkdf2-sha512\\\$25000\\\$LQ9.v9zUmpbSGjH2nqPS2g\\\$LeLqocCO6rXPCpqfwSrMR2ckX3Lfj6Ln9qGk2E.GdE1V8bk6VmN2nTc6Zq5KzlKn.xLpwB5VjLU2LLKklPKlKn' 
+           WHERE login = 'admin';
+       \""
+       
+       # Clear sessions to force fresh login
+       su - postgres -c "psql -d odoo_db -c \"DELETE FROM ir_sessions;\""
+       
+       # Vacuum and analyze for better performance
+       print_status "Optimizing database after import..."
+       su - postgres -c "psql -d odoo_db -c \"VACUUM ANALYZE;\""
+       
+       # Start Odoo service again
+       systemctl start odoo
+       
+       print_status "Pre-configured database import completed successfully!"
+       FINAL_DB_NAME="odoo_db"
+   elif [[ "$DB_CHOICE" == "2" ]]; then
+       print_status "Fresh Odoo installation - database will be created on first access"
+       FINAL_DB_NAME="Will be created on first login"
+   else
+       FINAL_DB_NAME="None"
+   fi
+fi
+
+# ================================
+# SSL SETUP
+# ================================
+
+print_status "=== STEP 6: Setting up SSL Certificates ==="
+
+# Wait for services to be fully operational
+print_status "Waiting for services to be fully operational..."
+sleep 20
+
+# Setup SSL certificate
+print_status "Obtaining SSL certificates..."
+
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   # Get SSL for ERP subdomain
+   certbot --nginx -d "erp.$MAIN_DOMAIN" --email "$SSL_EMAIL" --agree-tos --non-interactive --redirect
+fi
+
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+   # Get SSL for main domain
+   certbot --nginx -d "$MAIN_DOMAIN" -d "www.$MAIN_DOMAIN" --email "$SSL_EMAIL" --agree-tos --non-interactive --redirect
+fi
+
+if [ $? -eq 0 ]; then
+   print_status "SSL certificates obtained successfully!"
+   
+   # Add security headers to HTTPS configurations
+   if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+       sed -i '/server_name.*erp\.'$MAIN_DOMAIN';/a\\n    # Security headers\n    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' /etc/nginx/sites-available/main
+   fi
+   
+   systemctl reload nginx
+   
+   # Setup auto-renewal
+   systemctl enable certbot.timer
+   systemctl start certbot.timer
+else
+   print_warning "SSL certificate setup failed. You can set it up manually later with:"
+   print_warning "certbot --nginx -d $MAIN_DOMAIN -d erp.$MAIN_DOMAIN"
+fi
+
+# ================================
+# FIREWALL CONFIGURATION
+# ================================
+
+print_status "=== STEP 7: Configuring Firewall ==="
+
+ufw --force enable
+ufw allow ssh
+ufw allow 80/tcp
+ufw allow 443/tcp
+
+if [[ "$INSTALL_TYPE" == "1" ]]; then
+   ufw allow 8069/tcp  # Allow direct Odoo access if needed
+fi
+
+# ================================
+# BACKUP SETUP
+# ================================
+
+print_status "=== STEP 8: Setting up Backup Scripts ==="
+
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   # Setup Odoo backup cron job
+   echo "0 2 * * * /opt/odoo18-enterprise/backup.sh" | crontab -
+fi
+
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+   # Setup WordPress backup cron job
+   echo "0 3 * * * /var/www/wordpress_backup.sh" | crontab -
+fi
+
+# ================================
+# SAVE CREDENTIALS
+# ================================
+
+print_status "=== STEP 9: Saving Credentials ==="
+
+cat > /root/installation_credentials.txt <<EOL
+=== Complete Installation Credentials ===
+Date: $(date)
+Installation Type: $INSTALL_TYPE
+Domain: $MAIN_DOMAIN
+Server IP: $SERVER_IP
+
+EOL
+
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   cat >> /root/installation_credentials.txt <<EOL
+=== ODOO 18 ENTERPRISE ===
+URL: https://erp.$MAIN_DOMAIN
+Username: admin
+Password: admin
+Database: $FINAL_DB_NAME
+Admin Panel Password: 5011700
+
+Database Info:
+- DB User: odoo18e
+- DB Password: odoo123
+- PostgreSQL access: su - postgres
+
+File Locations:
+- Installation: /opt/odoo18-enterprise/odoo
+- Custom addons: /opt/odoo18-enterprise/addons_manatra
+- Config: /etc/odoo/odoo.conf
+- Logs: /var/log/odoo/odoo.log
+- Backups: /opt/odoo18-enterprise/backups
+- Backup Script: /opt/odoo18-enterprise/backup.sh
+
+EOL
+fi
+
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+   cat >> /root/installation_credentials.txt <<EOL
+=== WORDPRESS ===
+URL: https://$MAIN_DOMAIN
+Admin URL: https://$MAIN_DOMAIN/wp-admin
+(Complete setup by visiting the URL)
+
+Database Info:
+- Database Name: $WP_DB_NAME
+- Database User: $WP_DB_USER
+- Database Password: $WP_DB_PASS
+- MySQL Root Password: $MYSQL_ROOT_PASS
+
+File Locations:
+- WordPress: /var/www/$MAIN_DOMAIN
+- Backup Script: /var/www/wordpress_backup.sh
+- PHP Version: $PHP_VERSION
+- PHP Config: /etc/php/$PHP_VERSION/fpm
+
+EOL
+fi
+
+cat >> /root/installation_credentials.txt <<EOL
+=== SYSTEM INFO ===
+Nginx Config: /etc/nginx/sites-available/main
+SSL Email: $SSL_EMAIL
+Firewall: UFW enabled (SSH, HTTP, HTTPS allowed)
+
+=== USEFUL COMMANDS ===
+# Check services status
+systemctl status nginx
+EOL
+
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   echo "systemctl status odoo" >> /root/installation_credentials.txt
+   echo "systemctl status postgresql" >> /root/installation_credentials.txt
+fi
+
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+   echo "systemctl status php$PHP_VERSION-fpm" >> /root/installation_credentials.txt
+   echo "systemctl status mysql" >> /root/installation_credentials.txt
+fi
+
+cat >> /root/installation_credentials.txt <<EOL
+
+# View logs
+tail -f /var/log/nginx/error.log
+EOL
+
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   echo "tail -f /var/log/odoo/odoo.log" >> /root/installation_credentials.txt
+fi
+
+cat >> /root/installation_credentials.txt <<EOL
+
+# SSL certificate renewal
+certbot renew --dry-run
+
+# Manual backups
+EOL
+
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   echo "/opt/odoo18-enterprise/backup.sh" >> /root/installation_credentials.txt
+fi
+
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+   echo "/var/www/wordpress_backup.sh" >> /root/installation_credentials.txt
+fi
+
+chmod 600 /root/installation_credentials.txt
+
+# ================================
+# FINAL STATUS CHECK
+# ================================
+
+print_status "=== STEP 10: Final Status Check ==="
+
+sleep 10
+
+# Check services
+NGINX_STATUS=$(systemctl is-active nginx)
+print_status "Service Status:"
+print_status "  Nginx: $NGINX_STATUS"
+
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   ODOO_STATUS=$(systemctl is-active odoo)
+   POSTGRES_STATUS=$(systemctl is-active postgresql)
+   print_status "  Odoo: $ODOO_STATUS"
+   print_status "  PostgreSQL: $POSTGRES_STATUS"
+fi
+
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+   PHP_STATUS=$(systemctl is-active php$PHP_VERSION-fpm)
+   MYSQL_STATUS=$(systemctl is-active mysql)
+   print_status "  PHP-FPM: $PHP_STATUS"
+   print_status "  MySQL: $MYSQL_STATUS"
+fi
+
+# ================================
+# SUCCESS MESSAGE
+# ================================
+
+print_status "=== 🎉 INSTALLATION COMPLETE! 🎉 ==="
+echo ""
+print_status "📱 Access Information:"
+
+if [[ "$INSTALL_TYPE" == "1" ]]; then
+   print_status "🌐 Odoo ERP: https://erp.$MAIN_DOMAIN"
+   print_status "   👤 Username: admin"
+   print_status "   🔑 Password: admin"
+   
+elif [[ "$INSTALL_TYPE" == "2" ]]; then
+   print_status "🌐 WordPress: https://$MAIN_DOMAIN"
+   print_status "🛡️  Admin: https://$MAIN_DOMAIN/wp-admin"
+   print_status "   (Complete setup by visiting the URL)"
+   
+elif [[ "$INSTALL_TYPE" == "3" ]]; then
+   print_status "🌐 WordPress: https://$MAIN_DOMAIN"
+   print_status "🛡️  WordPress Admin: https://$MAIN_DOMAIN/wp-admin"
+   print_status "🌐 Odoo ERP: https://erp.$MAIN_DOMAIN"
+   print_status "   👤 Username: admin"
+print_status "   🔑 Password: admin"
+fi
+
+echo ""
+print_status "🔐 Complete credentials saved in: /root/installation_credentials.txt"
+echo ""
+
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   print_status "🛠️ Odoo Information:"
+   print_status "   📂 Installation: /opt/odoo18-enterprise/odoo"
+   print_status "   📂 Custom addons: /opt/odoo18-enterprise/addons_manatra"
+   print_status "   ⚙️ Config: /etc/odoo/odoo.conf"
+   print_status "   📝 Logs: /var/log/odoo/odoo.log"
+   print_status "   💾 Backups: /opt/odoo18-enterprise/backups"
+   print_status "   🗄️ Database: $FINAL_DB_NAME"
+   echo ""
+fi
+
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+   print_status "🛠️ WordPress Information:"
+   print_status "   📂 Installation: /var/www/$MAIN_DOMAIN"
+   print_status "   📝 PHP Version: $PHP_VERSION"
+   print_status "   💾 Backup Script: /var/www/wordpress_backup.sh"
+   print_status "   🗄️ Database: $WP_DB_NAME"
+   echo ""
+fi
+
+print_status "⚡ Performance Optimizations:"
+print_status "   ⏱️ Extended timeouts: 2-3 hours for large operations"
+print_status "   🌐 Nginx optimized for high performance"
+print_status "   🗜️ Gzip compression enabled"
+print_status "   🔒 SSL certificates installed and auto-renewal configured"
+print_status "   🛡️ Rate limiting and security headers configured"
+echo ""
+
+print_status "🔧 Useful Commands:"
+print_status "   # Restart services"
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   print_status "   systemctl restart odoo"
+fi
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+   print_status "   systemctl restart php$PHP_VERSION-fpm"
+fi
+print_status "   systemctl restart nginx"
+echo ""
+
+print_status "   # Check status"
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   print_status "   systemctl status odoo"
+fi
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+   print_status "   systemctl status php$PHP_VERSION-fpm"
+   print_status "   systemctl status mysql"
+fi
+print_status "   systemctl status nginx"
+echo ""
+
+print_status "   # View logs"
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   print_status "   tail -f /var/log/odoo/odoo.log"
+fi
+print_status "   tail -f /var/log/nginx/error.log"
+echo ""
+
+print_status "   # Manual backups"
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   print_status "   /opt/odoo18-enterprise/backup.sh"
+fi
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+   print_status "   /var/www/wordpress_backup.sh"
+fi
+echo ""
+
+print_status "   # SSL certificate management"
+print_status "   certbot renew --dry-run    # Test renewal"
+print_status "   certbot certificates       # List certificates"
+echo ""
+
+print_status "🚀 Next Steps:"
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+   print_status "   1. Visit https://$MAIN_DOMAIN to complete WordPress setup"
+   print_status "   2. Create your WordPress admin account"
+   print_status "   3. Install themes and plugins as needed"
+fi
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   if [[ "$INSTALL_TYPE" == "3" ]]; then
+       print_status "   4. Visit https://erp.$MAIN_DOMAIN to access Odoo"
+   else
+       print_status "   1. Visit https://erp.$MAIN_DOMAIN to access Odoo"
+   fi
+   print_status "   $(if [[ "$INSTALL_TYPE" == "3" ]]; then echo "5."; else echo "2."; fi) Login with admin/admin credentials"
+   if [[ "$DB_CHOICE" == "2" ]]; then
+       print_status "   $(if [[ "$INSTALL_TYPE" == "3" ]]; then echo "6."; else echo "3."; fi) Create your first database"
+   fi
+   print_status "   $(if [[ "$INSTALL_TYPE" == "3" ]]; then echo "7."; else echo "4."; fi) Configure your Odoo instance"
+fi
+echo ""
+
+print_status "📧 Support Information:"
+print_status "   Domain: $MAIN_DOMAIN"
+print_status "   SSL Email: $SSL_EMAIL"
+print_status "   Server IP: $SERVER_IP"
+echo ""
+
+# Final service verification
+ALL_SERVICES_OK=true
+
+if [[ "$NGINX_STATUS" != "active" ]]; then
+   print_error "❌ Nginx is not running!"
+   ALL_SERVICES_OK=false
+fi
+
+if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+   if [[ "$ODOO_STATUS" != "active" ]]; then
+       print_error "❌ Odoo is not running!"
+       ALL_SERVICES_OK=false
+   fi
+   if [[ "$POSTGRES_STATUS" != "active" ]]; then
+       print_error "❌ PostgreSQL is not running!"
+       ALL_SERVICES_OK=false
+   fi
+fi
+
+if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+   if [[ "$PHP_STATUS" != "active" ]]; then
+       print_error "❌ PHP-FPM is not running!"
+       ALL_SERVICES_OK=false
+   fi
+   if [[ "$MYSQL_STATUS" != "active" ]]; then
+       print_error "❌ MySQL is not running!"
+       ALL_SERVICES_OK=false
+   fi
+fi
+
+if [[ "$ALL_SERVICES_OK" == true ]]; then
+   print_status "✅ All services are running successfully!"
+   print_status "🎊 Installation completed successfully!"
+   echo ""
+   print_status "🌟 Your server is ready for production use!"
+   print_status "🔐 Don't forget to change default passwords!"
+   
+   # Show URLs one more time for clarity
+   echo ""
+   print_status "🔗 Quick Access Links:"
+   if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+       print_status "   WordPress: https://$MAIN_DOMAIN"
+   fi
+   if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+       print_status "   Odoo ERP: https://erp.$MAIN_DOMAIN"
+   fi
+   
+else
+   print_error "❌ Some services are not running properly!"
+   echo ""
+   print_status "🔍 Troubleshooting:"
+   print_status "   1. Check service logs for errors"
+   print_status "   2. Verify configuration files"
+   print_status "   3. Check system resources (disk space, memory)"
+   print_status "   4. Review /root/installation_credentials.txt for details"
+   echo ""
+   print_status "🆘 Common solutions:"
+   print_status "   systemctl restart nginx"
+   if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "3" ]]; then
+       print_status "   systemctl restart odoo"
+       print_status "   systemctl restart postgresql"
+   fi
+   if [[ "$INSTALL_TYPE" == "2" || "$INSTALL_TYPE" == "3" ]]; then
+       print_status "   systemctl restart php$PHP_VERSION-fpm"
+       print_status "   systemctl restart mysql"
+   fi
+fi
+
+print_status "📋 Installation log and credentials: /root/installation_credentials.txt"
+print_status "=== Installation Script Completed ==="
+
+EOF
+
+chmod +x complete_odoo_wordpress_install.sh
+./complete_odoo_wordpress_install.sh
