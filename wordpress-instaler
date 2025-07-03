@@ -1,0 +1,510 @@
+cat > wordpress_install_fixed.sh << 'EOF'
+#!/bin/bash
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+print_status() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_question() {
+    echo -e "${BLUE}[QUESTION]${NC} $1"
+}
+
+print_status "=== WordPress Installation with Proper PHP Detection ==="
+
+# Get domain information
+print_question "WordPress Domain Configuration:"
+read -p "Enter your main domain name (e.g., bsepar.com): " MAIN_DOMAIN
+read -p "Enter your email for SSL certificate: " SSL_EMAIL
+
+if [[ -z "$MAIN_DOMAIN" || -z "$SSL_EMAIL" ]]; then
+    print_error "Domain name and email are required!"
+    exit 1
+fi
+
+# تولید رمزهای امن
+print_status "Generating secure credentials..."
+MYSQL_ROOT_PASS="mysql_$(openssl rand -base64 16 | tr -d '=+/')"
+WP_DB_NAME="wp_$(openssl rand -hex 4)"
+WP_DB_USER="wpuser_$(openssl rand -hex 6)"
+WP_DB_PASS="$(openssl rand -base64 24 | tr -d '=+/')_$(openssl rand -hex 4)"
+
+print_status "Database: $WP_DB_NAME | User: $WP_DB_USER"
+
+# 1. تشخیص نسخه اوبونتو و نصب PHP
+print_status "Detecting Ubuntu version and installing PHP..."
+
+# Update package list
+apt update
+
+# Install basic requirements
+apt install -y software-properties-common curl wget
+
+# Detect Ubuntu version
+UBUNTU_VERSION=$(lsb_release -rs 2>/dev/null || echo "unknown")
+print_status "Ubuntu version: $UBUNTU_VERSION"
+
+# Add Ondrej PHP repository (works for all Ubuntu versions)
+print_status "Adding PHP repository..."
+add-apt-repository ppa:ondrej/php -y
+apt update
+
+# Try to detect available PHP versions
+print_status "Detecting available PHP versions..."
+AVAILABLE_PHP_VERSIONS=$(apt-cache search "^php[0-9]\.[0-9]-fpm$" | grep -o "php[0-9]\.[0-9]" | sort -V | tail -3)
+print_status "Available PHP versions: $AVAILABLE_PHP_VERSIONS"
+
+# Choose PHP version based on availability
+if apt-cache show php8.1-fpm >/dev/null 2>&1; then
+    PHP_VERSION="8.1"
+elif apt-cache show php8.0-fpm >/dev/null 2>&1; then
+    PHP_VERSION="8.0"
+elif apt-cache show php7.4-fpm >/dev/null 2>&1; then
+    PHP_VERSION="7.4"
+else
+    # Fallback to latest available
+    PHP_VERSION=$(echo "$AVAILABLE_PHP_VERSIONS" | tail -1 | sed 's/php//')
+fi
+
+print_status "Selected PHP version: $PHP_VERSION"
+
+# Install PHP packages (excluding problematic ones)
+print_status "Installing PHP $PHP_VERSION and modules..."
+
+# Core PHP packages that exist in all versions
+PHP_PACKAGES="php$PHP_VERSION php$PHP_VERSION-fpm php$PHP_VERSION-mysql php$PHP_VERSION-curl 
+php$PHP_VERSION-gd php$PHP_VERSION-mbstring php$PHP_VERSION-xml php$PHP_VERSION-zip 
+php$PHP_VERSION-intl php$PHP_VERSION-bcmath php$PHP_VERSION-soap php$PHP_VERSION-cli 
+php$PHP_VERSION-common php$PHP_VERSION-opcache php$PHP_VERSION-readline"
+
+# Install packages one by one to handle missing ones gracefully
+for package in $PHP_PACKAGES; do
+    if apt-cache show "$package" >/dev/null 2>&1; then
+        print_status "Installing $package..."
+        apt install -y "$package"
+    else
+        print_warning "Package $package not available, skipping..."
+    fi
+done
+
+# Try to install additional packages if available
+OPTIONAL_PACKAGES="php$PHP_VERSION-imagick php$PHP_VERSION-xmlrpc"
+for package in $OPTIONAL_PACKAGES; do
+    if apt-cache show "$package" >/dev/null 2>&1; then
+        apt install -y "$package" 2>/dev/null || print_warning "Failed to install $package"
+    fi
+done
+
+# Install MySQL
+print_status "Installing MySQL..."
+apt install -y mysql-server mysql-client
+
+# 2. Verify PHP installation
+PHP_FPM_DIR="/etc/php/$PHP_VERSION/fpm"
+PHP_INI_FILE="$PHP_FPM_DIR/php.ini"
+POOL_DIR="$PHP_FPM_DIR/pool.d"
+
+print_status "Checking PHP installation..."
+print_status "PHP-FPM directory: $PHP_FPM_DIR"
+
+if [[ ! -d "$PHP_FPM_DIR" ]]; then
+    print_error "PHP-FPM directory still not found!"
+    print_status "Available PHP directories:"
+    ls -la /etc/php/ 2>/dev/null || echo "No PHP directories found"
+    
+    # Try to find any available PHP-FPM
+    AVAILABLE_PHP_FPM=$(find /etc/php -name "fpm" -type d 2>/dev/null | head -1)
+    if [[ -n "$AVAILABLE_PHP_FPM" ]]; then
+        PHP_VERSION=$(echo "$AVAILABLE_PHP_FPM" | grep -o '[0-9]\.[0-9]')
+        PHP_FPM_DIR="$AVAILABLE_PHP_FPM"
+        PHP_INI_FILE="$PHP_FPM_DIR/php.ini"
+        POOL_DIR="$PHP_FPM_DIR/pool.d"
+        print_status "Found alternative PHP-FPM: $PHP_FPM_DIR (version $PHP_VERSION)"
+    else
+        print_error "No PHP-FPM installation found!"
+        exit 1
+    fi
+fi
+
+# 3. Configure MySQL
+print_status "Configuring MySQL..."
+systemctl start mysql
+systemctl enable mysql
+
+# Set MySQL root password
+mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$MYSQL_ROOT_PASS';" 2>/dev/null || \
+mysql -e "UPDATE mysql.user SET authentication_string = PASSWORD('$MYSQL_ROOT_PASS') WHERE User = 'root' AND Host = 'localhost';" 2>/dev/null || \
+mysqladmin -u root password "$MYSQL_ROOT_PASS" 2>/dev/null
+
+# Secure MySQL installation
+mysql -u root -p"$MYSQL_ROOT_PASS" -e "DELETE FROM mysql.user WHERE User='';" 2>/dev/null || true
+mysql -u root -p"$MYSQL_ROOT_PASS" -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');" 2>/dev/null || true
+mysql -u root -p"$MYSQL_ROOT_PASS" -e "DROP DATABASE IF EXISTS test;" 2>/dev/null || true
+mysql -u root -p"$MYSQL_ROOT_PASS" -e "FLUSH PRIVILEGES;" 2>/dev/null || true
+
+# 4. Create WordPress database
+print_status "Creating WordPress database..."
+mysql -u root -p"$MYSQL_ROOT_PASS" -e "CREATE DATABASE IF NOT EXISTS \`$WP_DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+mysql -u root -p"$MYSQL_ROOT_PASS" -e "CREATE USER IF NOT EXISTS '$WP_DB_USER'@'localhost' IDENTIFIED BY '$WP_DB_PASS';"
+mysql -u root -p"$MYSQL_ROOT_PASS" -e "GRANT ALL PRIVILEGES ON \`$WP_DB_NAME\`.* TO '$WP_DB_USER'@'localhost';"
+mysql -u root -p"$MYSQL_ROOT_PASS" -e "FLUSH PRIVILEGES;"
+
+# 5. Download WordPress
+print_status "Downloading WordPress..."
+cd /tmp
+rm -f latest.tar.gz
+wget -q https://wordpress.org/latest.tar.gz
+tar xzf latest.tar.gz
+
+# Create WordPress directory
+rm -rf /var/www/$MAIN_DOMAIN
+mkdir -p /var/www/$MAIN_DOMAIN
+cp -R wordpress/* /var/www/$MAIN_DOMAIN/
+rm -rf wordpress latest.tar.gz
+
+# 6. Configure WordPress
+print_status "Configuring WordPress..."
+cd /var/www/$MAIN_DOMAIN
+
+# Generate WordPress salts
+SALT_KEYS=$(curl -s https://api.wordpress.org/secret-key/1.1/salt/)
+
+# Create wp-config.php
+cat > wp-config.php <<EOL
+<?php
+define('DB_NAME', '$WP_DB_NAME');
+define('DB_USER', '$WP_DB_USER');
+define('DB_PASSWORD', '$WP_DB_PASS');
+define('DB_HOST', 'localhost');
+define('DB_CHARSET', 'utf8mb4');
+define('DB_COLLATE', '');
+
+$SALT_KEYS
+
+\$table_prefix = 'wp_$(openssl rand -hex 3)_';
+
+define('WP_DEBUG', false);
+define('WP_MEMORY_LIMIT', '512M');
+define('DISALLOW_FILE_EDIT', true);
+define('WP_AUTO_UPDATE_CORE', true);
+define('FORCE_SSL_ADMIN', true);
+
+if ( ! defined( 'ABSPATH' ) ) {
+    define( 'ABSPATH', __DIR__ . '/' );
+}
+
+require_once ABSPATH . 'wp-settings.php';
+EOL
+
+# 7. Configure PHP-FPM
+print_status "Configuring PHP-FPM..."
+
+# Create WordPress pool
+cat > $POOL_DIR/wordpress.conf <<EOL
+[wordpress]
+user = www-data
+group = www-data
+listen = /run/php/php$PHP_VERSION-fpm-wordpress.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+
+pm = dynamic
+pm.max_children = 50
+pm.start_servers = 5
+pm.min_spare_servers = 5
+pm.max_spare_servers = 35
+pm.max_requests = 1000
+
+php_admin_value[memory_limit] = 512M
+php_admin_value[upload_max_filesize] = 100M
+php_admin_value[post_max_size] = 100M
+php_admin_value[max_execution_time] = 300
+
+security.limit_extensions = .php
+EOL
+
+# Optimize PHP settings
+if [[ -f "$PHP_INI_FILE" ]]; then
+    cp "$PHP_INI_FILE" "$PHP_INI_FILE.backup"
+    sed -i 's/memory_limit = .*/memory_limit = 512M/' $PHP_INI_FILE
+    sed -i 's/upload_max_filesize = .*/upload_max_filesize = 100M/' $PHP_INI_FILE
+    sed -i 's/post_max_size = .*/post_max_size = 100M/' $PHP_INI_FILE
+    sed -i 's/max_execution_time = .*/max_execution_time = 300/' $PHP_INI_FILE
+fi
+
+# Start PHP-FPM
+systemctl restart php$PHP_VERSION-fpm
+systemctl enable php$PHP_VERSION-fpm
+
+# Verify PHP-FPM is running
+if systemctl is-active --quiet php$PHP_VERSION-fpm; then
+    print_status "✅ PHP $PHP_VERSION-FPM is running"
+else
+    print_error "❌ PHP-FPM failed to start"
+    systemctl status php$PHP_VERSION-fpm
+    exit 1
+fi
+
+# 8. Configure Nginx
+print_status "Configuring Nginx..."
+
+# Backup existing configuration
+if [[ -f "/etc/nginx/sites-available/odoo" ]]; then
+    cp /etc/nginx/sites-available/odoo /etc/nginx/sites-available/odoo.backup
+    print_status "Existing Odoo config backed up"
+fi
+
+# Find ERP subdomain
+ERP_SUBDOMAIN=""
+if [[ -f "/etc/nginx/sites-available/odoo" ]]; then
+    ERP_SUBDOMAIN=$(grep -o 'server_name[[:space:]]*[^;]*' /etc/nginx/sites-available/odoo | grep -E 'erp\.|[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+\.[a-zA-Z]+' | sed 's/server_name[[:space:]]*//' | sed 's/;//' | head -1)
+fi
+
+print_status "ERP subdomain found: ${ERP_SUBDOMAIN:-'none'}"
+
+# Create cache directory
+mkdir -p /var/cache/nginx/wordpress
+chown -R www-data:www-data /var/cache/nginx/
+
+# Create new Nginx configuration
+cat > /etc/nginx/sites-available/wordpress-and-odoo <<EOL
+# FastCGI cache for WordPress
+fastcgi_cache_path /var/cache/nginx/wordpress levels=1:2 keys_zone=wordpress:100m max_size=1g inactive=60m use_temp_path=off;
+
+# Rate limiting
+limit_req_zone \$binary_remote_addr zone=wp_login:10m rate=5r/m;
+limit_req_zone \$binary_remote_addr zone=wp_admin:10m rate=10r/m;
+
+# WordPress on main domain
+server {
+    listen 80;
+    server_name $MAIN_DOMAIN www.$MAIN_DOMAIN;
+    
+    root /var/www/$MAIN_DOMAIN;
+    index index.php index.html index.htm;
+    
+    # Basic settings
+    server_tokens off;
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    
+    # File upload settings
+    client_max_body_size 100M;
+    client_body_timeout 300s;
+    
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1000;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml;
+    
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    
+    # WordPress permalinks
+    location / {
+        try_files \$uri \$uri/ /index.php?\$args;
+    }
+    
+    # Block sensitive files
+    location ~ /\. { deny all; }
+    location ~ ~\$ { deny all; }
+    location ~* /wp-config.php { deny all; }
+    location = /xmlrpc.php { deny all; }
+    
+    # PHP processing
+    location ~ \.php\$ {
+        include fastcgi_params;
+        fastcgi_pass unix:/run/php/php$PHP_VERSION-fpm-wordpress.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        
+        # Basic caching
+        fastcgi_cache wordpress;
+        fastcgi_cache_valid 200 301 302 60m;
+        fastcgi_cache_bypass \$skip_cache;
+        fastcgi_no_cache \$skip_cache;
+        
+        # Skip cache for dynamic content
+        set \$skip_cache 0;
+        if (\$request_method = POST) { set \$skip_cache 1; }
+        if (\$query_string != "") { set \$skip_cache 1; }
+        if (\$request_uri ~* "/wp-admin/|/xmlrpc.php|wp-.*.php") { set \$skip_cache 1; }
+        if (\$http_cookie ~* "comment_author|wordpress_[a-f0-9]+|wp-postpass|wordpress_logged_in") { set \$skip_cache 1; }
+    }
+    
+    # Static files
+    location ~* \.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+}
+EOL
+
+# Add existing Odoo configuration if present
+if [[ -f "/etc/nginx/sites-available/odoo" && -n "$ERP_SUBDOMAIN" ]]; then
+    print_status "Adding existing Odoo configuration..."
+    echo "" >> /etc/nginx/sites-available/wordpress-and-odoo
+    echo "# Existing Odoo configuration" >> /etc/nginx/sites-available/wordpress-and-odoo
+    cat /etc/nginx/sites-available/odoo >> /etc/nginx/sites-available/wordpress-and-odoo
+fi
+
+# Test Nginx configuration
+print_status "Testing Nginx configuration..."
+nginx -t
+
+if [ $? -eq 0 ]; then
+    # Activate new configuration
+    rm -f /etc/nginx/sites-enabled/default
+    rm -f /etc/nginx/sites-enabled/odoo
+    rm -f /etc/nginx/sites-enabled/main
+    
+    ln -sf /etc/nginx/sites-available/wordpress-and-odoo /etc/nginx/sites-enabled/
+    
+    systemctl reload nginx
+    print_status "✅ Nginx configuration activated"
+else
+    print_error "❌ Nginx configuration test failed!"
+    exit 1
+fi
+
+# 9. Set permissions
+print_status "Setting correct permissions..."
+chown -R www-data:www-data /var/www/$MAIN_DOMAIN
+find /var/www/$MAIN_DOMAIN -type d -exec chmod 755 {} \;
+find /var/www/$MAIN_DOMAIN -type f -exec chmod 644 {} \;
+chmod 600 /var/www/$MAIN_DOMAIN/wp-config.php
+
+# Create uploads directory
+mkdir -p /var/www/$MAIN_DOMAIN/wp-content/uploads
+chown -R www-data:www-data /var/www/$MAIN_DOMAIN/wp-content/uploads
+chmod -R 755 /var/www/$MAIN_DOMAIN/wp-content/uploads
+
+# 10. Install WP-CLI
+print_status "Installing WP-CLI..."
+curl -O https://raw.githubusercontent.com/wp-cli/wp-cli/main/wp-cli.phar 2>/dev/null
+chmod +x wp-cli.phar
+mv wp-cli.phar /usr/local/bin/wp
+
+# 11. Setup SSL
+print_status "Setting up SSL certificate..."
+if command -v certbot >/dev/null 2>&1; then
+    certbot --nginx -d "$MAIN_DOMAIN" -d "www.$MAIN_DOMAIN" --email "$SSL_EMAIL" --agree-tos --non-interactive --redirect
+    
+    if [ $? -eq 0 ]; then
+        print_status "✅ SSL certificate installed"
+        systemctl reload nginx
+    else
+        print_warning "SSL setup failed - you can set it up manually later"
+    fi
+else
+    print_warning "Certbot not found - install it manually for SSL"
+fi
+
+# 12. Create backup script
+cat > /var/www/wordpress_backup.sh <<EOL
+#!/bin/bash
+DATE=\$(date +%Y%m%d_%H%M%S)
+BACKUP_DIR="/var/www/backups"
+mkdir -p \$BACKUP_DIR
+
+mysqldump -u '$WP_DB_USER' -p'$WP_DB_PASS' '$WP_DB_NAME' | gzip > \$BACKUP_DIR/wp_db_\$DATE.sql.gz
+tar czf \$BACKUP_DIR/wp_files_\$DATE.tar.gz -C /var/www/$MAIN_DOMAIN .
+find \$BACKUP_DIR -name "wp_*" -mtime +7 -delete
+
+echo "WordPress backup completed: \$DATE"
+EOL
+
+chmod +x /var/www/wordpress_backup.sh
+
+# 13. Save credentials
+cat > /root/wordpress_credentials.txt <<EOL
+WordPress Installation Complete
+==============================
+Date: $(date)
+Domain: https://$MAIN_DOMAIN
+PHP Version: $PHP_VERSION
+
+Database Information:
+- Database Name: $WP_DB_NAME
+- Database User: $WP_DB_USER
+- Database Password: $WP_DB_PASS
+- MySQL Root Password: $MYSQL_ROOT_PASS
+
+File Locations:
+- WordPress: /var/www/$MAIN_DOMAIN
+- Backup Script: /var/www/wordpress_backup.sh
+- Nginx Config: /etc/nginx/sites-available/wordpress-and-odoo
+- PHP Config: $PHP_FPM_DIR
+
+Access URLs:
+- WordPress: https://$MAIN_DOMAIN
+- WordPress Admin: https://$MAIN_DOMAIN/wp-admin
+$(if [[ -n "$ERP_SUBDOMAIN" ]]; then echo "- Odoo ERP: https://$ERP_SUBDOMAIN"; fi)
+
+Next Steps:
+1. Visit https://$MAIN_DOMAIN to complete WordPress setup
+2. Create your admin account
+3. Install themes and plugins
+EOL
+
+chmod 600 /root/wordpress_credentials.txt
+
+# 14. Final check
+print_status "=== Installation Summary ==="
+
+# Check services
+NGINX_STATUS=$(systemctl is-active nginx)
+PHP_STATUS=$(systemctl is-active php$PHP_VERSION-fpm)
+MYSQL_STATUS=$(systemctl is-active mysql)
+
+print_status "Service Status:"
+print_status "  Nginx: $NGINX_STATUS"
+print_status "  PHP-FPM: $PHP_STATUS"
+print_status "  MySQL: $MYSQL_STATUS"
+
+if [[ "$NGINX_STATUS" == "active" && "$PHP_STATUS" == "active" && "$MYSQL_STATUS" == "active" ]]; then
+    print_status "🎉 SUCCESS! All services are running!"
+    echo ""
+    print_status "📱 Access Information:"
+    print_status "🌐 WordPress: https://$MAIN_DOMAIN"
+    print_status "🛡️  Admin: https://$MAIN_DOMAIN/wp-admin"
+    if [[ -n "$ERP_SUBDOMAIN" ]]; then
+        print_status "🌐 Odoo: https://$ERP_SUBDOMAIN"
+    fi
+    echo ""
+    print_status "🔐 Credentials saved in: /root/wordpress_credentials.txt"
+    echo ""
+    print_status "🚀 Next: Visit https://$MAIN_DOMAIN to complete WordPress setup"
+else
+    print_error "❌ Some services are not running properly!"
+    print_status "Check logs:"
+    print_status "  systemctl status nginx"
+    print_status "  systemctl status php$PHP_VERSION-fpm"
+    print_status "  systemctl status mysql"
+fi
+
+EOF
+
+chmod +x wordpress_install_fixed.sh
+./wordpress_install_fixed.sh
